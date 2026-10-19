@@ -72,6 +72,20 @@ Two error types, reported separately:
 Prompt version is stored with every brief (v2 since 19 Oct 2026: rule 6, estimates not "will").
 The daily GitHub run stores one brief per day, which builds the evaluation sample.
 
+### 6b. Page notes and options to consider (prompt v3, 19 Oct 2026)
+- One brief per company (UAL, DAL, AAL), so the text follows the company chosen on the dashboard.
+- Round 3 (same LLM, same facts-only rule): a 2-3 sentence note per dashboard page and 2-3 options to
+  CONSIDER, each with why now (a number from the facts), the trade-off and the page holding the evidence.
+- Same number check over all of it (one rewrite, then the computed summaries and no options that day)
+  and the same wording flags.
+- Design choice: each option points to its evidence page and states a trade-off, a light "cognitive
+  forcing" step that reduces blind acceptance of AI advice (Bucinca, Malaya & Gajos 2021) - the
+  over-reliance risk shown by Spatharioti et al. 2025 and Klingbeil et al. 2024.
+- Limitation to state: the AI sees only the dashboard's computed facts, not company strategy, contracts
+  or hedging programmes, so its options are prompts for discussion, not advice.
+> "Options are AI-generated from verified facts and always shown with their evidence and trade-off; the
+> executive decides."
+
 ## 7. Data freshness and operations  (audit #2, #5)
 - Wording: **daily-refreshed**, not "real-time" (market data daily; financials quarterly; GDP quarterly with a lag).
 - Runs automatically every morning on GitHub Actions; this also keeps the free Supabase database awake.
@@ -129,6 +143,7 @@ possible, report results separately for professionals.
 15. Pamuk, M., & Schumann, M. (2024). Towards AI dashboards in financial services. *Machine Learning and Knowledge Extraction*, 6(3), 1720-1761. doi:10.3390/make6030085
 16. Lavalle, A., Mate, A., Santos, M. Y., Guimaraes, P., Trujillo, J., & Santos, A. (2025). A methodology for the systematic design of storytelling dashboards applied to Industry 4.0. *Data & Knowledge Engineering*, 156. doi:10.1016/j.datak.2025.102410
 17. Perez, A. S. et al. (2025). An LLM-based approach for insight generation in data analysis. *NAACL 2025*.
+17a. Bucinca, Z., Malaya, M. B., & Gajos, K. Z. (2021). To trust or to think: Cognitive forcing functions can reduce overreliance on AI in AI-assisted decision-making. *Proc. ACM Hum.-Comput. Interact.* 5(CSCW1), Article 188.
 
 ## Variables: why each risk factor is in the model (4)
 18. Horobet, A., Zlatea, M. L. E., Belascu, L., & Dumitrescu, D. G. (2022). Oil price volatility and airlines' stock returns. *Journal of Business Economics and Management*, 23(2), 284-304. doi:10.3846/jbem.2022.16094

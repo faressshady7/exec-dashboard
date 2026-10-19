@@ -14,7 +14,7 @@ DB = os.environ.get("TEST_DATABASE_URL")
 def test_every_view_is_defined():
     assert {"kpi_latest", "kpi_trend", "market_today", "market_history", "whatif", "scenarios",
             "robustness", "assumptions", "news", "ai_brief", "freshness", "companies",
-            "stock_history", "valuation", "attention"} == set(VIEWS)
+            "stock_history", "valuation", "attention", "ai_recommendations"} == set(VIEWS)
 
 
 @pytest.mark.skipif(not DB, reason="set TEST_DATABASE_URL to run database tests")
@@ -67,20 +67,26 @@ def test_views_build_on_gold_tables_and_survive_recompute():
         return create_views(eng)
 
     created, skipped = write_all()
-    assert set(skipped) == {"ai_brief"}                       # ai.brief does not exist yet
+    assert set(skipped) == {"ai_brief", "ai_recommendations"}  # ai.brief does not exist yet
     created, skipped = write_all()                            # recompute: replace tables under the views
-    assert set(skipped) == {"ai_brief"}
+    assert set(skipped) == {"ai_brief", "ai_recommendations"}
 
     cands = [Insight(id=f"t:{i}", type=f"type{i}", title=f"Insight {i}", summary="S",
                      facts=[Fact(f"f{i}", "fact", 10.0 + i, "%")], significance=0.5, impact=0.5) for i in range(3)]
     reply = lambda p, schema: ({"ranking": [{"id": c.id, "relevance": 0.5, "why": "x"} for c in cands]}
                                if schema is Round1 else {"headline": "H", "brief": "It is 11.0%.", "fact_ids_used": ["f1"]})
-    store(eng, s, generate(s, cands, MockLLM(reply)))          # store() recreates the views
+    from dashboard.ai import NarrativeResult, Check
+    nar = NarrativeResult({"page_briefing": "a", "page_peers": "b", "page_risks": "c", "page_whatif": "d", "page_detail": "e"},
+                          [{"title": "Consider X", "detail": "Because 11.0%.", "page": 2}, {"title": "Consider Y", "detail": "y", "page": 3}],
+                          Check(True, 1, []), [], False, 1)
+    store(eng, s, generate(s, cands, MockLLM(reply)), n=nar)  # store() recreates the views
 
     with eng.connect() as con:
         views = set(con.execute(text("SELECT table_name FROM information_schema.views WHERE table_schema='bi'")).scalars())
         w = con.execute(text("SELECT ticker, fuel_impact_per_pct, fuel_past_high_pct, caveat FROM bi.whatif ORDER BY sort_order")).all()
         brief = con.execute(text("SELECT headline, check_passed FROM bi.ai_brief")).one()
+        recs = con.execute(text("SELECT ticker, rank, title, page FROM bi.ai_recommendations ORDER BY rank")).all()
+        pb = con.execute(text("SELECT page_peers FROM bi.ai_brief")).scalar()
         n_assump = con.execute(text("SELECT count(*) FROM bi.assumptions")).scalar()
         hist = con.execute(text("SELECT count(*) FROM bi.scenarios WHERE scenario_type = 'historical'")).scalar()
         val = con.execute(text("SELECT ticker, pe, caveat, pe_text, market_cap_text FROM bi.valuation ORDER BY sort_order")).all()
@@ -101,4 +107,5 @@ def test_views_build_on_gold_tables_and_survive_recompute():
     assert any(r.severity == "MODERATE" and r.page == "peer" for r in att)       # Delta refinery caveat
     assert wi2.fuel_impact_10pct_text.startswith("-$") and wi2.fuel_reliability in ("RELIABLE", "ROUGH ESTIMATE")
     assert mt.latest_text and mt.position_label
-    assert brief == ("H", True) and n_assump == 4 and hist == 3   # only "Last 12 months, again" has data here: 1 per company
+    assert brief == ("H", True) and pb == "b"
+    assert [(r.rank, r.title, r.page) for r in recs] == [(1, "Consider X", 2), (2, "Consider Y", 3)] and recs[0].ticker == "UAL" and n_assump == 4 and hist == 3   # only "Last 12 months, again" has data here: 1 per company

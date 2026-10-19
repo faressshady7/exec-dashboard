@@ -123,8 +123,18 @@ VIEWS: dict[str, str] = {
     # AI brief per company (`company` = ticker): the frozen study brief if one exists, otherwise the newest
     "ai_brief": """
         SELECT DISTINCT ON (company) brief_id, created_at, company, company AS ticker, model, prompt_version, headline, brief,
-               check_passed, fallback_used, wording_flags::text AS wording_flags, frozen
+               check_passed, fallback_used, wording_flags::text AS wording_flags, frozen,
+               pages->>'page_briefing' AS page_briefing, pages->>'page_peers' AS page_peers,
+               pages->>'page_risks' AS page_risks, pages->>'page_whatif' AS page_whatif,
+               pages->>'page_detail' AS page_detail, narrative_passed, narrative_fallback
         FROM ai.brief ORDER BY company, frozen DESC, created_at DESC""",
+
+    # AI options to consider, one row each (from the same brief as above)
+    "ai_recommendations": """
+        WITH b AS (SELECT DISTINCT ON (company) * FROM ai.brief ORDER BY company, frozen DESC, created_at DESC)
+        SELECT b.company AS ticker, r.n::int AS rank, r.x->>'title' AS title, r.x->>'detail' AS detail,
+               (r.x->>'page')::int AS page, b.narrative_passed, b.narrative_fallback
+        FROM b CROSS JOIN LATERAL jsonb_array_elements(COALESCE(b.recommendations, '[]'::jsonb)) WITH ORDINALITY AS r(x, n)""",
 
     # Peer Benchmark: share prices rebased to 100 at the start of the window (empty until FMP_API_KEY is set)
     "stock_history": """

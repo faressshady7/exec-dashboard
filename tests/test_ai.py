@@ -169,7 +169,7 @@ def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
     terms = load_settings().ai.flag_terms
     assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
     assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
-    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v2"
+    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v3"
 
 
 
@@ -187,3 +187,32 @@ def test_brief_can_be_about_any_company():
     ins = peer_insights(pg, "DAL")[0]
     f = {x.id: x.value for x in ins.facts}
     assert f["peer.operating_margin_pct.peer_avg"] == 4.5 and f["peer.operating_margin_pct.gap"] == 4.5
+
+
+
+def _narrative_items():
+    from dashboard.insights import Fact, Insight
+    return [Insight(id="exp", type="exposure", title="Exposure to jet fuel", summary="A 10% rise in jet fuel is estimated to cost $379M a quarter.",
+                    facts=[Fact("exposure.fuel.impact_10pct", "fuel", -379e6, "USD")], significance=0.8, impact=1.0),
+            Insight(id="mkt", type="market_position", title="Jet fuel high", summary="Jet fuel is $4.56/gal.",
+                    facts=[Fact("jet_fuel.latest", "jet fuel", 4.56, "USD/gal")], significance=0.9, impact=1.0)]
+
+
+def _round3(detail):
+    return {"page_briefing": "Jet fuel is $4.56/gal.", "page_peers": "United is mid-pack.", "page_risks": "A 10% rise costs about $379M.",
+            "page_whatif": "Shocks are estimated from past quarters.", "page_detail": "Margins moved.",
+            "recommendations": [{"title": "Consider hedging part of next quarter's fuel", "detail": detail, "page": 3}]}
+
+
+def test_page_notes_and_options_are_checked():
+    from dashboard.ai import MockLLM, Round3, narrate
+    s = load_settings()
+    good = narrate(s, _narrative_items(), MockLLM(lambda p, schema: _round3("Fuel is $4.56/gal and a 10% rise costs about $379M; trade-off: no gain if prices fall.")))
+    assert good.check.passed and not good.fallback_used and good.recommendations[0]["page"] == 3
+    assert set(good.pages) == {"page_briefing", "page_peers", "page_risks", "page_whatif", "page_detail"}
+    bad = narrate(s, _narrative_items(), MockLLM(lambda p, schema: _round3("A rise costs $999M.")))
+    assert bad.fallback_used and "No AI recommendation" in bad.recommendations[0]["title"]
+    assert "$379M" in bad.pages["page_risks"]                    # template = the computed summary
+    from dashboard.ai import round3_prompt
+    prompt = round3_prompt(_narrative_items(), "United Airlines")
+    assert "CONSIDER" in prompt and "trade-off" in prompt and 'display: "-$379M"' in prompt

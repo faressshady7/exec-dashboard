@@ -73,6 +73,8 @@ def fmt(v: float, unit: str) -> str:
         return f"{v:.1f}x"
     if unit == "USD/gal":
         return f"${v:.2f}/gal"
+    if unit == "USD/share":
+        return f"${v:.2f}"
     if unit == "USD/bbl":
         return f"${v:.2f}/bbl"
     if unit == "count":
@@ -290,3 +292,45 @@ def build_candidates(s: Settings, eng: Engine) -> list[Insight]:
     rest = [c for c in cands if c.id not in chosen]
     shortlist = sorted(best_per_type, key=lambda c: c.score, reverse=True) + rest
     return shortlist[: max(s.ai.candidates, len(best_per_type))]
+
+
+# --------------------------------------------------------------------------- facts for page briefs (round 3)
+def valuation_insights(val: pd.DataFrame, focal: str) -> list[Insight]:
+    """Share price, market value and multiples for every company (Peer Benchmark page)."""
+    if val.empty or focal not in set(val["ticker"]):
+        return []
+    facts = []
+    for r in val.itertuples():
+        facts += [Fact(f"val.{r.ticker}.price", f"{r.ticker} share price", r.price, "USD/share"),
+                  Fact(f"val.{r.ticker}.mcap", f"{r.ticker} market value", r.market_cap, "USD"),
+                  Fact(f"val.{r.ticker}.ret1y", f"{r.ticker} share price change over 1 year", r.return_1y_pct, "%")]
+        if pd.notna(r.pe):
+            facts.append(Fact(f"val.{r.ticker}.pe", f"{r.ticker} price / earnings (last 4 quarters)", r.pe, "x"))
+        if pd.notna(r.net_debt):
+            facts.append(Fact(f"val.{r.ticker}.net_debt", f"{r.ticker} net debt", r.net_debt, "USD"))
+    f = val[val["ticker"] == focal].iloc[0]
+    return [Insight(id="valuation", type="valuation", title=f"Market view of {focal} vs peers",
+                    summary=f"{focal} shares are {fmt(f['return_1y_pct'], '%')} over a year; market value {fmt(f['market_cap'], 'USD')}.",
+                    facts=facts, significance=0.5, impact=0.5, sources=["gold.valuation (FMP prices, SEC shares)"])]
+
+
+def scenario_insights(sc: pd.DataFrame, focal: str) -> list[Insight]:
+    """Past episodes replayed on the company (What-if page)."""
+    h = sc[(sc["scenario_type"] == "historical") & (sc["ticker"] == focal)] if not sc.empty else sc
+    if h.empty:
+        return []
+    facts = []
+    for i, r in enumerate(h.itertuples()):
+        facts.append(Fact(f"scen.{i}.impact", f"{r.scenario}: estimated effect on {focal}'s quarterly operating income", r.impact_q, "USD"))
+        if pd.notna(r.fuel_pct):
+            facts.append(Fact(f"scen.{i}.fuel", f"{r.scenario}: jet fuel move", r.fuel_pct, "%"))
+    names = ", ".join(h["scenario"].astype(str))
+    return [Insight(id="scenarios", type="scenario", title="Past episodes replayed on today's quarter",
+                    summary=f"Historical replays for {focal}: {names}.", facts=facts, significance=0.5, impact=0.6,
+                    sources=["gold.scenario (historical)"])]
+
+
+def narrative_facts(s: Settings, eng: Engine, cands: list[Insight]) -> list[Insight]:
+    """Everything the page briefs and recommendations may cite: the ranked candidates + market view + scenarios."""
+    extra = valuation_insights(_read(eng, "valuation"), s.focal_company) + scenario_insights(_read(eng, "scenario"), s.focal_company)
+    return cands + extra
