@@ -255,6 +255,16 @@ derived_factors:
     unit: percentage points
     evidence: "H22 (maturity risk)"
 
+# Model thresholds (Step 5). Researcher's choices - each is re-tested with nearby values by
+# `python -m dashboard.robustness` (also run inside compute); results go to gold.robustness.
+method:
+  fuel_min_r2: 0.5     # below this the fuel regression is too weak to trust -> simple rule (fuel cost x shock)
+  rate_min_r2: 0.3     # lower bar: rates move slowly, but below it we say "not modelled" rather than guess
+  unusual_sigma: 2.0   # ~95% of normal changes fall within +/-2 standard deviations, so beyond = rare
+  exclude_covid: true  # airline capacity collapsed: those quarters describe a different business
+  covid_start: 2020-04-01
+  covid_end: 2021-12-31
+
 # AI layer (Step 6-7). The LLM never calculates: it picks and explains numbers computed in Step 5.
 ai:
   provider: gemini                 # gemini | ollama

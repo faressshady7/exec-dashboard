@@ -17,7 +17,7 @@ Method notes (thesis decisions)
     thresholds: airline capacity collapsed, so those quarters describe a different business.
   - Fuel sensitivity: quarterly fuel expense regressed on the quarter's average jet fuel price.
     The slope is the implied gallons burned per quarter, so +10% fuel = slope x price x 10%.
-    If the fit is weak (R^2 < 0.5) the simple proportional rule (fuel expense x shock) is used.
+    If the fit is weak (R^2 < fuel_min_r2, default 0.5) the simple proportional rule (fuel expense x shock) is used.
   - Rate sensitivity: quarterly interest expense regressed on the average fed funds rate. Airline
     debt is mostly fixed-rate, so a weak fit (R^2 < 0.3) is reported as "not modelled" instead of
     inventing a number (the 10-K Item 7A disclosure is the proper source - planned manual input).
@@ -39,7 +39,14 @@ from sqlalchemy.engine import Engine
 
 from dashboard.config import Settings, load_settings
 
-COVID = (pd.Timestamp("2020-04-01"), pd.Timestamp("2021-12-31"))
+COVID = (pd.Timestamp("2020-04-01"), pd.Timestamp("2021-12-31"))   # default; settings.yaml `method` overrides
+
+
+def _outside_covid(dates: pd.Series, m) -> pd.Series:
+    """True for dates that may be used for ESTIMATION (all dates if COVID is not excluded)."""
+    if m is None or m.covid is None:
+        return pd.Series(True, index=dates.index) if m is not None else ~dates.between(*COVID)
+    return ~dates.between(pd.Timestamp(m.covid[0]), pd.Timestamp(m.covid[1]))
 FUEL_SHOCKS = [-30, -20, -10, 0, 10, 20, 30]          # % change in jet fuel price
 RATE_SHOCKS = [-100, -50, 0, 50, 100]                 # basis points change in fed funds
 
@@ -100,7 +107,7 @@ def _safe_div(a, b):
     return np.where((b != 0) & pd.notna(b) & pd.notna(a), a / b, np.nan)
 
 
-def compute_kpis(fin: pd.DataFrame) -> pd.DataFrame:
+def compute_kpis(fin: pd.DataFrame, m=None) -> pd.DataFrame:
     df = fin.copy()
     get = lambda c: df[c] if c in df else pd.Series(np.nan, index=df.index)
     df["operating_margin_pct"] = _safe_div(get("operating_income"), get("revenue")) * 100
@@ -125,18 +132,19 @@ def compute_kpis(fin: pd.DataFrame) -> pd.DataFrame:
     long["label"] = long["kpi"].map(lambda k: KPIS[k][0])
     long["unit"] = long["kpi"].map(lambda k: KPIS[k][1])
     long["better"] = long["kpi"].map(lambda k: KPIS[k][2])
-    return flag_unusual(long)
+    return flag_unusual(long, m)
 
 
-def flag_unusual(long: pd.DataFrame) -> pd.DataFrame:
-    """A quarter is 'unusual' when its change from the previous quarter is more than 2 standard
-    deviations of that company's normal quarter-to-quarter changes (COVID excluded)."""
+def flag_unusual(long: pd.DataFrame, m=None) -> pd.DataFrame:
+    """A quarter is 'unusual' when its change from the previous quarter is more than `unusual_sigma`
+    (default 2) standard deviations of that company's normal quarter-to-quarter changes (COVID excluded)."""
+    sigma = m.unusual_sigma if m is not None else 2.0
     long = long.sort_values(["ticker", "kpi", "period_end"]).copy()
     long["qoq_change"] = long.groupby(["ticker", "kpi"])["value"].diff()
-    normal = long[~long["period_end"].between(*COVID)]
+    normal = long[_outside_covid(long["period_end"], m)]
     sd = normal.groupby(["ticker", "kpi"])["qoq_change"].std().rename("qoq_sd")
     long = long.join(sd, on=["ticker", "kpi"])
-    long["unusual"] = (long["qoq_change"].abs() > 2 * long["qoq_sd"]) & long["qoq_sd"].gt(0)
+    long["unusual"] = (long["qoq_change"].abs() > sigma * long["qoq_sd"]) & long["qoq_sd"].gt(0)
     return long.drop(columns="qoq_sd")
 
 
@@ -240,14 +248,14 @@ def sensitivities(fin: pd.DataFrame, mkt: pd.DataFrame, s: Settings) -> pd.DataF
     for c in s.in_scope:
         f = fin[(fin["ticker"] == c.ticker)].set_index("period_end").sort_index()
         f = f[f.index.is_quarter_end]
-        est = f[~f.index.to_series().between(*COVID)]
+        est = f[_outside_covid(f.index.to_series(), s.method).to_numpy()]
         latest = f.dropna(subset=["fuel_expense"]).iloc[-1]
         latest_q = latest.name
         px_now = fuel_px.get(latest_q, np.nan)
 
         # ---- fuel
         fit = ols(fuel_px.reindex(est.index), est["fuel_expense"])
-        if fit and fit.r2 >= 0.5 and fit.slope > 0:
+        if fit and fit.r2 >= s.method.fuel_min_r2 and fit.slope > 0:
             per_pct = fit.slope * px_now / 100          # $ per quarter for a 1% fuel price move
             method = "regression (implied gallons x price)"
         else:
@@ -264,7 +272,7 @@ def sensitivities(fin: pd.DataFrame, mkt: pd.DataFrame, s: Settings) -> pd.DataF
 
         # ---- interest rates
         fit = ols(ffr.reindex(est.index), est.get("interest_expense"))
-        modelled = bool(fit and fit.r2 >= 0.3 and fit.slope > 0)
+        modelled = bool(fit and fit.r2 >= s.method.rate_min_r2 and fit.slope > 0)
         rows.append({"ticker": c.ticker, "factor": "fed_funds", "shock_unit": "bp rate change",
                      "impact_per_unit_q": -(fit.slope / 100) if modelled else np.nan,
                      "method": "regression (interest expense on fed funds)" if modelled
@@ -313,10 +321,13 @@ def scenario_grid(sens: pd.DataFrame) -> pd.DataFrame:
 # =========================================================================== run
 def run(s: Settings, eng: Engine) -> dict[str, pd.DataFrame]:
     fin, mkt = load_financials(eng), load_market(eng)
-    kpis = compute_kpis(fin)
+    from dashboard.robustness import robustness
+    kpis = compute_kpis(fin, s.method)
     sens = sensitivities(fin, mkt, s)
+    rob, share = robustness(fin, mkt, s, base=sens)
+    sens = sens.merge(share, on=["ticker", "factor"], how="left")       # robust_pct travels to the AI as a fact
     out = {"kpi_quarterly": kpis, "peer_gap": peer_gaps(kpis, s), "market_snapshot": market_snapshot(mkt),
-           "sensitivity": sens, "scenario": scenario_grid(sens)}
+           "sensitivity": sens, "scenario": scenario_grid(sens), "robustness": rob}
     with eng.begin() as con:
         for name, df in out.items():
             df.assign(computed_at=pd.Timestamp.now(tz="UTC")).to_sql(

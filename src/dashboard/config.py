@@ -151,6 +151,20 @@ class DerivedFactor(BaseModel):
         return re.findall(r"[a-z][a-z0-9_]*", self.formula)
 
 
+class MethodSettings(BaseModel):
+    """Model thresholds (Step 5). Chosen by the researcher, tested by dashboard.robustness."""
+    fuel_min_r2: float = Field(default=0.5, ge=0, le=1)
+    rate_min_r2: float = Field(default=0.3, ge=0, le=1)
+    unusual_sigma: float = Field(default=2.0, gt=0, le=5)
+    exclude_covid: bool = True
+    covid_start: date = date(2020, 4, 1)
+    covid_end: date = date(2021, 12, 31)
+
+    @property
+    def covid(self):
+        return (self.covid_start, self.covid_end) if self.exclude_covid else None
+
+
 class Settings(BaseModel):
     project: Project
     focal_company: str
@@ -162,6 +176,7 @@ class Settings(BaseModel):
     financial_metrics: dict[str, FinancialMetric] = {}
     ai: AISettings = AISettings()
     news_filter: NewsFilter = NewsFilter()
+    method: MethodSettings = MethodSettings()
 
     @model_validator(mode="after")
     def check_references(self):

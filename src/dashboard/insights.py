@@ -202,6 +202,9 @@ def exposure_insights(sens: pd.DataFrame, focal: str) -> list[Insight]:
         facts = [Fact("exposure.fuel.impact_10pct", f"{focal} quarterly operating income change for +10% jet fuel", imp10, "USD"),
                  Fact("exposure.fuel.base_oi", f"{focal} quarterly operating income (base)", f["base_operating_income_q"], "USD"),
                  Fact("exposure.fuel.r2", "Fit of fuel cost vs jet fuel price (R-squared)", f["r2"], "index")]
+        if pd.notna(f.get("robust_pct", np.nan)):
+            facts.append(Fact("exposure.fuel.robust_pct", "Share of alternative model settings giving the same fuel result",
+                              f["robust_pct"], "%"))
         for t, p in fuel.drop(index=focal).iterrows():
             facts.append(Fact(f"exposure.fuel.{t}", f"{t} change for +10% jet fuel", p["impact_per_unit_q"] * 10, "USD"))
         out.append(Insight(
@@ -219,7 +222,9 @@ def exposure_insights(sens: pd.DataFrame, focal: str) -> list[Insight]:
             id="exposure:fed_funds", type="exposure", title="Exposure to interest rates",
             summary=f"A 1-point (100bp) rise in rates would add about {fmt(abs(imp), 'USD')} a quarter to {focal} interest costs (indicative; R-squared {r['r2']:.2f}).",
             facts=[Fact("exposure.rates.impact_100bp", f"{focal} quarterly cost of +100bp rates", imp, "USD"),
-                   Fact("exposure.rates.r2", "Fit of interest expense vs fed funds (R-squared)", r["r2"], "index")],
+                   Fact("exposure.rates.r2", "Fit of interest expense vs fed funds (R-squared)", r["r2"], "index")]
+                  + ([Fact("exposure.rates.robust_pct", "Share of alternative model settings giving the same rate result",
+                           r["robust_pct"], "%")] if pd.notna(r.get("robust_pct", np.nan)) else []),
             significance=_clip(abs(imp) / abs(r["base_operating_income_q"]) * 3) if r["base_operating_income_q"] else 0.3,
             impact=0.6, sources=["gold.sensitivity (indicative: debt level also changed)"]))
     return out

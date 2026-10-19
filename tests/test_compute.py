@@ -120,3 +120,27 @@ def test_refinery_caveat_reaches_the_ai_text():
     caveats = {c.ticker: "; ".join(c.caveats) for c in s.companies}
     out = {i.id: i.summary for i in peer_insights(pg, "UAL", caveats)}
     assert "refinery" in out["peer:fuel_share_opex_pct"] and "refinery" not in out["peer:operating_margin_pct"]
+
+
+def test_thresholds_come_from_settings():
+    s = load_settings()
+    q = quarters(12)
+    px = pd.Series(np.linspace(1.5, 3.0, 12), index=q)
+    fin = pd.concat([fin_frame(t, "focal" if t == "UAL" else "peer", fuel_px=px.to_numpy())
+                     for t in ("UAL", "DAL", "AAL")], ignore_index=True)
+    strict = s.model_copy(update={"method": s.method.model_copy(update={"fuel_min_r2": 1.01})})  # impossible bar
+    fuel = sensitivities(fin, market_frame(px), strict).query("ticker == 'UAL' and factor == 'jet_fuel'").iloc[0]
+    assert fuel["method"].startswith("proportional")
+
+
+def test_robustness_table_and_share():
+    from dashboard.robustness import robustness
+    s = load_settings()
+    q = quarters(12)
+    px = pd.Series(np.linspace(1.5, 3.0, 12), index=q)
+    fin = pd.concat([fin_frame(t, "focal" if t == "UAL" else "peer", fuel_px=px.to_numpy())
+                     for t in ("UAL", "DAL", "AAL")], ignore_index=True)
+    rob, share = robustness(fin, market_frame(px), s)
+    assert {"fuel_min_r2", "rate_min_r2", "exclude_covid", "unusual_sigma"} <= set(rob["parameter"])
+    ual_fuel = share.query("ticker == 'UAL' and factor == 'jet_fuel'")["robust_pct"].iloc[0]
+    assert ual_fuel == 100                     # perfect synthetic fit: no threshold changes the result
