@@ -335,6 +335,15 @@ def run(s: Settings, eng: Engine) -> dict[str, pd.DataFrame]:
     return out
 
 
+def _show(method: str, value: float) -> str:
+    """'regression -$379M' / 'not modelled' / '3 flags' for the robustness printout."""
+    if method == "count":
+        return f"{value:.0f} flags"
+    if method.startswith("not") or value != value:
+        return "not modelled"
+    return f"{method.split(' ')[0]} {'-' if value < 0 else ''}${abs(value) / 1e6:,.0f}M"
+
+
 def _fmt(v: float, unit: str) -> str:
     if pd.isna(v):
         return "-"
@@ -379,7 +388,7 @@ def main() -> None:
     print(f"\nROBUSTNESS: {len(rob)} checks with alternative thresholds, {len(changed)} changed a result")
     for r in changed.itertuples():
         print(f"  {r.parameter} {r.chosen} -> {r.alternative}: {r.ticker} {r.factor}: "
-              f"{r.method_base.split(' ')[0]} {r.impact_base:,.0f} -> {r.method_alt.split(' ')[0]} {r.impact_alt:,.0f}")
+              f"{_show(r.method_base, r.impact_base)} -> {_show(r.method_alt, r.impact_alt)}")
 
 
 if __name__ == "__main__":
