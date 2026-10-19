@@ -26,6 +26,10 @@ SCHEMAS = ("silver", "gold", "ai")
 def database_url() -> str:
     load_dotenv(PROJECT_ROOT / ".env")
     url = os.environ.get("DATABASE_URL") or load_settings().project.database_url
+    # forgive common copy-paste mistakes (e.g. a GitHub secret pasted as the whole .env line)
+    url = url.strip().strip('"').strip("'").strip()
+    if url.upper().startswith("DATABASE_URL="):
+        url = url.split("=", 1)[1].strip().strip('"').strip("'")
     # Supabase shows "postgresql://..."; SQLAlchemy needs the driver name
     if url.startswith("postgresql://") or url.startswith("postgres://"):
         url = re.sub(r"^postgres(ql)?://", "postgresql+psycopg://", url)
