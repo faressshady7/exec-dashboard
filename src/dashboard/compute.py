@@ -374,6 +374,13 @@ def main() -> None:
         val = "-" if pd.isna(r.impact_per_unit_q) else _fmt(r.impact_per_unit_q * unit, "USD")
         print(f"  {r.ticker:<5}{lbl}  {val:>9}  R2={r.r2:.2f}  {r.method}")
 
+    rob = out["robustness"]
+    changed = rob[~rob["same_result"]]
+    print(f"\nROBUSTNESS: {len(rob)} checks with alternative thresholds, {len(changed)} changed a result")
+    for r in changed.itertuples():
+        print(f"  {r.parameter} {r.chosen} -> {r.alternative}: {r.ticker} {r.factor}: "
+              f"{r.method_base.split(' ')[0]} {r.impact_base:,.0f} -> {r.method_alt.split(' ')[0]} {r.impact_alt:,.0f}")
+
 
 if __name__ == "__main__":
     main()
