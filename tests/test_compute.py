@@ -80,7 +80,7 @@ def test_fuel_sensitivity_recovers_gallons_and_what_if():
     rate = sens[(sens.ticker == "UAL") & (sens.factor == "fed_funds")].iloc[0]
     assert rate["method"].startswith("not modelled")                       # flat rates -> no fit
     grid = scenario_grid(sens)
-    assert set(grid.factor) == {"jet_fuel", "fed_funds"} and grid[grid.factor == "fed_funds"].impact_q.isna().all()
+    assert set(grid.factor) == {"jet_fuel", "fed_funds", "combined"} and grid[grid.factor == "fed_funds"].impact_q.isna().all()
 
 
 def test_peer_gap_ranks_by_direction():
@@ -155,3 +155,31 @@ def test_sensitivity_text_is_framed_as_an_estimate():
                      for t in ("UAL", "DAL", "AAL")], ignore_index=True)
     fuel = next(i for i in exposure_insights(sensitivities(fin, market_frame(px), s), "UAL") if i.id == "exposure:jet_fuel")
     assert fuel.summary.startswith("Based on past quarters") and "estimated" in fuel.summary and " would " not in fuel.summary
+
+
+def test_past_range_flag_combined_and_historical_scenarios():
+    from datetime import date
+    from dashboard.compute import historical_moves, past_ranges, scenario_grid
+    from dashboard.config import HistoricalScenario
+    s = load_settings()
+    q = quarters(12)
+    px = pd.Series(np.linspace(1.5, 3.0, 12), index=q)           # max 4-quarter rise ~ +29%
+    fin = pd.concat([fin_frame(t, "focal" if t == "UAL" else "peer", fuel_px=px.to_numpy())
+                     for t in ("UAL", "DAL", "AAL")], ignore_index=True)
+    mkt = market_frame(px)
+    sens = sensitivities(fin, mkt, s)
+    ranges = past_ranges(mkt)
+    lo, hi = ranges["jet_fuel"]
+    assert 0 < lo < hi < 40                                        # only rises in this synthetic history
+    assert what_if(sens, "UAL", fuel_pct=hi - 1, ranges=ranges)["within_past_range"] is True
+    far = what_if(sens, "UAL", fuel_pct=100, ranges=ranges)
+    assert far["within_past_range"] is False and "extrapolation" in far["note"]
+    # combined = fuel + rates added (rates not modelled here -> fuel part only)
+    s2 = s.model_copy(update={"scenarios": [HistoricalScenario(name="ramp", start=date(2016, 1, 15), end=date(2018, 12, 15))]})
+    hist = historical_moves(mkt, s2)
+    assert hist[0]["fuel_pct"] == pytest.approx((3.0 / 1.5 - 1) * 100)   # first vs last quarter price
+    grid = scenario_grid(sens, ranges, hist)
+    h = grid[(grid.scenario_type == "historical") & (grid.ticker == "UAL")].iloc[0]
+    assert h["impact_q"] == pytest.approx(-30e6 * 100, rel=1e-6)          # -$30M per 1% x +100%
+    assert h["within_past_range"] is False or h["within_past_range"] == False
+    assert (grid.scenario_type == "combined").sum() == 3 * 4

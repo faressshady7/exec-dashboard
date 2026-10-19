@@ -49,6 +49,16 @@ def _outside_covid(dates: pd.Series, m) -> pd.Series:
     return ~dates.between(pd.Timestamp(m.covid[0]), pd.Timestamp(m.covid[1]))
 FUEL_SHOCKS = [-30, -20, -10, 0, 10, 20, 30]          # % change in jet fuel price
 RATE_SHOCKS = [-100, -50, 0, 50, 100]                 # basis points change in fed funds
+COMBINED = [(10, 100), (20, 100), (-10, -100), (-20, -100)]   # (fuel %, rates bp) moved together
+
+# Shown under the simulator. Same framing as the airlines' own 10-K Item 7A sensitivities.
+ASSUMPTIONS = [
+    "Linear: the effect grows in proportion to the shock (twice the shock, twice the effect).",
+    "No reaction: fares, capacity and hedging are assumed unchanged; in reality airlines respond, "
+    "so large shocks are likely overstated.",
+    "Combined shocks are added together; interactions between them are ignored.",
+    "Rate changes affect interest cost, not operating income.",
+]
 
 # KPI catalogue: label, unit, which direction is better (for ranking and colour)
 KPIS = {
@@ -285,8 +295,37 @@ def sensitivities(fin: pd.DataFrame, mkt: pd.DataFrame, s: Settings) -> pd.DataF
     return pd.DataFrame(rows)
 
 
-def what_if(sens: pd.DataFrame, ticker: str, fuel_pct: float = 0.0, rate_bp: float = 0.0) -> dict:
-    """Live simulator used by the dashboard sliders. Same maths as the scenario table."""
+def past_ranges(mkt: pd.DataFrame) -> dict[str, tuple[float, float]]:
+    """Largest falls and rises actually seen over any 4-quarter window in the stored history:
+    jet fuel in % (quarterly average price), fed funds in basis points. A scenario beyond these
+    is 'outside past experience' - the linear estimate is then an extrapolation."""
+    out = {}
+    fuel = quarterly_average(mkt, "jet_fuel").dropna()
+    if len(fuel) > 4:
+        chg = (fuel / fuel.shift(4) - 1).dropna() * 100
+        out["jet_fuel"] = (float(chg.min()), float(chg.max()))
+    ffr = quarterly_average(mkt, "fed_funds").dropna()
+    if len(ffr) > 4:
+        chg = (ffr - ffr.shift(4)).dropna() * 100
+        out["fed_funds"] = (float(chg.min()), float(chg.max()))
+    return out
+
+
+def within_past(fuel_pct: float, rate_bp: float, ranges: dict | None) -> bool | None:
+    if not ranges:
+        return None
+    ok = True
+    for value, key in ((fuel_pct, "jet_fuel"), (rate_bp, "fed_funds")):
+        if value and key in ranges:
+            lo, hi = ranges[key]
+            ok &= lo <= value <= hi
+    return bool(ok)
+
+
+def what_if(sens: pd.DataFrame, ticker: str, fuel_pct: float = 0.0, rate_bp: float = 0.0,
+            ranges: dict | None = None) -> dict:
+    """Live simulator used by the dashboard sliders. Same maths as the scenario table.
+    With `ranges` (from past_ranges) it also says whether the shock was ever seen in the data."""
     s = sens[sens["ticker"] == ticker].set_index("factor")
     fuel = s.loc["jet_fuel"]
     impact = fuel["impact_per_unit_q"] * fuel_pct
@@ -299,22 +338,62 @@ def what_if(sens: pd.DataFrame, ticker: str, fuel_pct: float = 0.0, rate_bp: flo
             "operating_income_q": op,
             "operating_margin_pct": op / fuel["base_revenue_q"] * 100,
             "base_operating_margin_pct": fuel["base_operating_income_q"] / fuel["base_revenue_q"] * 100,
-            "rate_modelled": not pd.isna(rate_row["impact_per_unit_q"])}
+            "rate_modelled": not pd.isna(rate_row["impact_per_unit_q"]),
+            "within_past_range": within_past(fuel_pct, rate_bp, ranges),
+            "note": None if within_past(fuel_pct, rate_bp, ranges) in (True, None)
+                    else "Outside moves seen in the data: an extrapolation, treat as rough"}
 
 
-def scenario_grid(sens: pd.DataFrame) -> pd.DataFrame:
+def historical_moves(mkt: pd.DataFrame, s: Settings) -> list[dict]:
+    """Measure each configured episode from the data: % change in jet fuel and bp change in
+    fed funds between the average of the start month and the average of the end month."""
+    out = []
+    last = mkt["obs_date"].max() if len(mkt) else None
+    for sc in s.scenarios:
+        end = pd.Timestamp(sc.end) if sc.end else last
+        start = pd.Timestamp(sc.start) if sc.start else (end - pd.DateOffset(years=1) if end is not None else None)
+        if end is None or start is None:
+            continue
+        def month_avg(code, when):
+            v = mkt[(mkt["code"] == code) & (mkt["obs_date"].dt.to_period("M") == when.to_period("M"))]["value"]
+            return v.mean() if len(v) else np.nan
+        f0, f1 = month_avg("jet_fuel", start), month_avg("jet_fuel", end)
+        r0, r1 = month_avg("fed_funds", start), month_avg("fed_funds", end)
+        if pd.isna(f0) or pd.isna(f1):
+            continue
+        out.append({"scenario": sc.name, "start": start.date(), "end": end.date(), "note": sc.note,
+                    "fuel_pct": (f1 / f0 - 1) * 100, "rate_bp": 0.0 if pd.isna(r0) or pd.isna(r1) else (r1 - r0) * 100})
+    return out
+
+
+def scenario_grid(sens: pd.DataFrame, ranges: dict | None = None, history: list[dict] | None = None) -> pd.DataFrame:
+    """All scenarios for every company. scenario_type: sensitivity (one factor), combined
+    (fuel + rates added), historical (a past episode replayed on today's company)."""
     rows = []
+
+    def row(t, stype, name, factor, shock, unit, fuel_pct, rate_bp, extra=None):
+        r = what_if(sens, t, fuel_pct=fuel_pct, rate_bp=rate_bp, ranges=ranges)
+        rate_only = factor == "fed_funds"
+        impact = (r["rate_impact_q"] if r["rate_modelled"] else np.nan) if rate_only else \
+                 r["fuel_impact_q"] if factor == "jet_fuel" else r["total_impact_q"]
+        rows.append({"ticker": t, "scenario_type": stype, "scenario": name, "factor": factor,
+                     "shock": shock, "shock_unit": unit, "fuel_pct": fuel_pct, "rate_bp": rate_bp,
+                     "impact_q": impact, "fuel_impact_q": r["fuel_impact_q"],
+                     "rate_impact_q": r["rate_impact_q"] if r["rate_modelled"] else np.nan,
+                     "operating_income_q": np.nan if rate_only else r["operating_income_q"],
+                     "operating_margin_pct": np.nan if rate_only else r["operating_margin_pct"],
+                     "within_past_range": r["within_past_range"], **(extra or {})})
+
     for t in sens["ticker"].unique():
         for shock in FUEL_SHOCKS:
-            r = what_if(sens, t, fuel_pct=shock)
-            rows.append({"ticker": t, "factor": "jet_fuel", "shock": shock, "shock_unit": "%",
-                         "impact_q": r["fuel_impact_q"], "operating_income_q": r["operating_income_q"],
-                         "operating_margin_pct": r["operating_margin_pct"]})
+            row(t, "sensitivity", f"jet fuel {shock:+d}%", "jet_fuel", shock, "%", shock, 0)
         for shock in RATE_SHOCKS:
-            r = what_if(sens, t, rate_bp=shock)
-            rows.append({"ticker": t, "factor": "fed_funds", "shock": shock, "shock_unit": "bp",
-                         "impact_q": r["rate_impact_q"] if r["rate_modelled"] else np.nan,
-                         "operating_income_q": np.nan, "operating_margin_pct": np.nan})
+            row(t, "sensitivity", f"rates {shock:+d}bp", "fed_funds", shock, "bp", 0, shock)
+        for f, r in COMBINED:
+            row(t, "combined", f"jet fuel {f:+d}% and rates {r:+d}bp (added, no interaction)", "combined", None, None, f, r)
+        for h in history or []:
+            row(t, "historical", h["scenario"], "historical", None, None, round(h["fuel_pct"], 1), round(h["rate_bp"]),
+                {"period": f"{h['start']} to {h['end']}", "note": h["note"]})
     return pd.DataFrame(rows)
 
 
@@ -327,7 +406,8 @@ def run(s: Settings, eng: Engine) -> dict[str, pd.DataFrame]:
     rob, share = robustness(fin, mkt, s, base=sens)
     sens = sens.merge(share, on=["ticker", "factor"], how="left")       # robust_pct travels to the AI as a fact
     out = {"kpi_quarterly": kpis, "peer_gap": peer_gaps(kpis, s), "market_snapshot": market_snapshot(mkt),
-           "sensitivity": sens, "scenario": scenario_grid(sens), "robustness": rob}
+           "sensitivity": sens, "scenario": scenario_grid(sens, past_ranges(mkt), historical_moves(mkt, s)),
+           "robustness": rob}
     with eng.begin() as con:
         for name, df in out.items():
             df.assign(computed_at=pd.Timestamp.now(tz="UTC")).to_sql(
@@ -382,6 +462,15 @@ def main() -> None:
         lbl = "+10% jet fuel" if r.factor == "jet_fuel" else "+100bp rates "
         val = "-" if pd.isna(r.impact_per_unit_q) else _fmt(r.impact_per_unit_q * unit, "USD")
         print(f"  {r.ticker:<5}{lbl}  {val:>9}  R2={r.r2:.2f}  {r.method}")
+
+    sc = out["scenario"]
+    hist = sc[(sc["scenario_type"] == "historical") & (sc["ticker"] == s.focal_company)]
+    if len(hist):
+        print(f"\nHISTORICAL SCENARIOS replayed on {s.focal_company} today (quarterly impact)")
+        for r in hist.itertuples():
+            flag = "" if r.within_past_range in (True, None) else "  [outside past range]"
+            print(f"  {r.scenario:<32} fuel {r.fuel_pct:+6.1f}%  rates {r.rate_bp:+5.0f}bp  ->  "
+                  f"{_fmt(r.impact_q, 'USD')}{flag}")
 
     rob = out["robustness"]
     changed = rob[~rob["same_result"]]

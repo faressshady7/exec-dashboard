@@ -265,6 +265,23 @@ method:
   covid_start: 2020-04-01
   covid_end: 2021-12-31
 
+# Historical scenarios (what-if): replay the ACTUAL moves of past episodes on today's company,
+# using the same sensitivities. Moves are measured from the data (month average at start vs end).
+# Complements the simple sliders (one factor, linear) - the "hybrid" stress-test practice.
+scenarios:
+  - name: "2020 COVID oil crash"
+    start: 2020-01-01
+    end: 2020-04-30
+    note: "Demand collapsed at the same time - the replay shows only the price effect"
+  - name: "2022 Ukraine war fuel spike"
+    start: 2022-01-01
+    end: 2022-06-30
+  - name: "2022-23 Fed rate hikes"
+    start: 2022-02-01
+    end: 2023-08-31
+  - name: "Last 12 months, again"
+    note: "The past year's moves repeated from today's level"
+
 # AI layer (Step 6-7). The LLM never calculates: it picks and explains numbers computed in Step 5.
 ai:
   provider: gemini                 # gemini | ollama

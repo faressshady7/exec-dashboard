@@ -151,6 +151,15 @@ class DerivedFactor(BaseModel):
         return re.findall(r"[a-z][a-z0-9_]*", self.formula)
 
 
+class HistoricalScenario(BaseModel):
+    """A past episode replayed on today's company (historical stress test).
+    Dates are optional: no end = latest data; no start = one year before the end."""
+    name: str
+    start: Optional[date] = None
+    end: Optional[date] = None
+    note: str = ""
+
+
 class MethodSettings(BaseModel):
     """Model thresholds (Step 5). Chosen by the researcher, tested by dashboard.robustness."""
     fuel_min_r2: float = Field(default=0.5, ge=0, le=1)
@@ -177,6 +186,7 @@ class Settings(BaseModel):
     ai: AISettings = AISettings()
     news_filter: NewsFilter = NewsFilter()
     method: MethodSettings = MethodSettings()
+    scenarios: list[HistoricalScenario] = []
 
     @model_validator(mode="after")
     def check_references(self):
