@@ -365,16 +365,32 @@ def store(eng: Engine, s: Settings, r: BriefResult, freeze: bool = False) -> int
     return bid
 
 
+def settings_for(s: Settings, ticker: str) -> Settings:
+    """The same settings with `ticker` as the company the brief is about and the others as its peers."""
+    others = [c.ticker for c in s.in_scope if c.ticker != ticker]
+    return s.model_copy(update={"focal_company": ticker, "peers": others})
+
+
 def main() -> None:
     from dashboard.db import engine
-    ap = argparse.ArgumentParser(description="Step 6: generate a checked AI brief")
-    ap.add_argument("--freeze", action="store_true", help="freeze this brief for the user study")
+    ap = argparse.ArgumentParser(description="Step 6: generate a checked AI brief for every company in scope")
+    ap.add_argument("--freeze", action="store_true", help="freeze these briefs for the user study")
+    ap.add_argument("--only", help="one ticker only (default: every company in scope)")
     args = ap.parse_args()
-    s = load_settings()
-    cands = build_candidates(s, engine())
+    base = load_settings()
+    tickers = [args.only] if args.only else [c.ticker for c in base.in_scope]
+    llm = make_llm(base.ai)
+    for t in tickers:
+        print(f"\n{'=' * 20} {t} {'=' * 20}")
+        _brief_one(settings_for(base, t), llm, args.freeze, engine())
+
+
+def _brief_one(s: Settings, llm: LLM, freeze: bool, eng) -> None:
+    cands = build_candidates(s, eng)
     print(f"{len(cands)} candidate insights computed (Step 5 numbers only)")
-    r = generate(s, cands, make_llm(s.ai))
-    bid = store(engine(), s, r, freeze=args.freeze)
+    r = generate(s, cands, llm)
+    bid = store(eng, s, r, freeze=freeze)
+    args = argparse.Namespace(freeze=freeze)
 
     print(f"\nTOP {len(r.selected)} INSIGHTS (LEVA score = 0.5 significance + 0.3 relevance + 0.2 impact)")
     for c in r.selected:

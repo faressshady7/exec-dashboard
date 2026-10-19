@@ -95,10 +95,10 @@ def test_views_build_on_gold_tables_and_survive_recompute():
     assert w[0].fuel_past_high_pct > 0 and "refinery" in w[1].caveat
     assert [r.ticker for r in val] == ["UAL", "DAL", "AAL"] and val[2].pe is None and "refinery" in val[1].caveat
     assert idx0 == (pytest.approx(100), 3)
-    assert val[2].pe_text == "n/m" and val[0].market_cap_text.startswith("$") and val[0].market_cap_text.endswith("B")
-    assert {r.status for r in kl} <= {"BETTER THAN PEERS", "WORSE THAN PEERS", "IN LINE"} and kl[0].value_text.endswith("B")
+    assert val[2].pe_text == "not meaningful (loss)" and val[0].market_cap_text.startswith("$") and val[0].market_cap_text.endswith("B")
+    assert {r.status for r in kl} <= {"BETTER THAN THE OTHER TWO", "WORSE THAN THE OTHER TWO", "IN LINE"} and kl[0].value_text.endswith("B")
     assert {r.page for r in att} == {"brief", "peer", "risk"} and att[0].rank == 1
     assert any(r.severity == "MODERATE" and r.page == "peer" for r in att)       # Delta refinery caveat
-    assert wi2.fuel_impact_10pct_text.startswith("-$") and wi2.fuel_reliability in ("RELIABLE", "INDICATIVE")
+    assert wi2.fuel_impact_10pct_text.startswith("-$") and wi2.fuel_reliability in ("RELIABLE", "ROUGH ESTIMATE")
     assert mt.latest_text and mt.position_label
     assert brief == ("H", True) and n_assump == 4 and hist == 3   # only "Last 12 months, again" has data here: 1 per company

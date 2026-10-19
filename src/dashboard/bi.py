@@ -34,13 +34,13 @@ VIEWS: dict[str, str] = {
                x.rank || ' of ' || x.n_companies AS rank_text,
                s.status, s.status_color, s.status_bg
         FROM x CROSS JOIN LATERAL (SELECT CASE
-                 WHEN x.own_peer_avg IS NULL THEN 'NO PEER DATA'
+                 WHEN x.own_peer_avg IS NULL THEN 'NO COMPARISON'
                  WHEN abs(x.value - x.own_peer_avg) <= 0.02 * abs(x.own_peer_avg) THEN 'IN LINE'
-                 WHEN (x.value > x.own_peer_avg) = (x.better = 'higher') THEN 'BETTER THAN PEERS'
-                 ELSE 'WORSE THAN PEERS' END AS status) st
+                 WHEN (x.value > x.own_peer_avg) = (x.better = 'higher') THEN 'BETTER THAN THE OTHER TWO'
+                 ELSE 'WORSE THAN THE OTHER TWO' END AS status) st
         CROSS JOIN LATERAL (SELECT st.status,
-                 CASE st.status WHEN 'BETTER THAN PEERS' THEN '#2E6B4F' WHEN 'WORSE THAN PEERS' THEN '#A33A3A' ELSE '#5F6670' END AS status_color,
-                 CASE st.status WHEN 'BETTER THAN PEERS' THEN '#DCEBDF' WHEN 'WORSE THAN PEERS' THEN '#F3D9D9' ELSE '#E6E2DC' END AS status_bg) s""",
+                 CASE st.status WHEN 'BETTER THAN THE OTHER TWO' THEN '#2E6B4F' WHEN 'WORSE THAN THE OTHER TWO' THEN '#A33A3A' ELSE '#5F6670' END AS status_color,
+                 CASE st.status WHEN 'BETTER THAN THE OTHER TWO' THEN '#DCEBDF' WHEN 'WORSE THAN THE OTHER TWO' THEN '#F3D9D9' ELSE '#E6E2DC' END AS status_bg) s""",
 
     # KPI trend lines (last N years), unusual quarters marked
     "kpi_trend": f"""
@@ -53,9 +53,9 @@ VIEWS: dict[str, str] = {
     "market_today": """
         SELECT m.*, v.scope,
                to_char(m.latest, 'FM999,990.00') AS latest_text,
-               to_char(m.chg_1y, 'SGFM9990.0') || CASE m.change_type WHEN 'points' THEN ' pp' ELSE '%' END || ' 1Y' AS chg_1y_text,
-               to_char(m.chg_1m, 'SGFM9990.0') || CASE m.change_type WHEN 'points' THEN ' pp' ELSE '%' END || ' 1M' AS chg_1m_text,
-               upper(m.position) AS position_label,
+               to_char(m.chg_1y, 'SGFM9990.0') || CASE m.change_type WHEN 'points' THEN ' points' ELSE '%' END || ' in 1 year' AS chg_1y_text,
+               to_char(m.chg_1m, 'SGFM9990.0') || CASE m.change_type WHEN 'points' THEN ' points' ELSE '%' END || ' in 1 month' AS chg_1m_text,
+               CASE WHEN m.percentile_10y >= 90 THEN 'VERY HIGH FOR 10 YEARS' WHEN m.percentile_10y >= 75 THEN 'HIGH FOR 10 YEARS' WHEN m.percentile_10y <= 10 THEN 'VERY LOW FOR 10 YEARS' WHEN m.percentile_10y <= 25 THEN 'LOW FOR 10 YEARS' ELSE 'NORMAL RANGE' END AS position_label,
                'Above ' || to_char(m.percentile_10y, 'FM990') || '% of the past 10 years' AS percentile_text,
                CASE WHEN m.percentile_10y >= 90 OR m.percentile_10y <= 10 THEN '#8A5A00'
                     WHEN m.percentile_10y >= 75 OR m.percentile_10y <= 25 THEN '#5F4B8B' ELSE '#5F6670' END AS position_color,
@@ -100,7 +100,7 @@ VIEWS: dict[str, str] = {
     # Precomputed scenarios: sensitivity grid, combined, historical replays
     "scenarios": """
         SELECT c.name AS company, c.sort_order, s.*, bi.fmt(s.impact_q, 'USD') AS impact_text,
-               CASE WHEN s.within_past_range THEN 'WITHIN PAST RANGE' ELSE 'BEYOND PAST RANGE' END AS range_label,
+               CASE WHEN s.within_past_range THEN 'SEEN BEFORE' ELSE 'BIGGER THAN ANY PAST MOVE' END AS range_label,
                CASE WHEN s.within_past_range THEN '#2E6B4F' ELSE '#8A5A00' END AS range_color,
                CASE WHEN s.within_past_range THEN '#DCEBDF' ELSE '#FBEFD3' END AS range_bg
         FROM gold.scenario s JOIN gold.dim_company c USING (ticker)""",
@@ -120,10 +120,11 @@ VIEWS: dict[str, str] = {
         WHERE d.full_date >= current_date - interval '30 days'""",
 
     # AI brief card: the frozen study brief if one exists, otherwise the newest
+    # AI brief per company (`company` = ticker): the frozen study brief if one exists, otherwise the newest
     "ai_brief": """
-        SELECT brief_id, created_at, company, model, prompt_version, headline, brief,
+        SELECT DISTINCT ON (company) brief_id, created_at, company, company AS ticker, model, prompt_version, headline, brief,
                check_passed, fallback_used, wording_flags::text AS wording_flags, frozen
-        FROM ai.brief ORDER BY frozen DESC, created_at DESC LIMIT 1""",
+        FROM ai.brief ORDER BY company, frozen DESC, created_at DESC""",
 
     # Peer Benchmark: share prices rebased to 100 at the start of the window (empty until FMP_API_KEY is set)
     "stock_history": """
@@ -137,15 +138,15 @@ VIEWS: dict[str, str] = {
                '$' || to_char(v.price, 'FM9,990.00') AS price_text,
                bi.fmt(v.market_cap, 'USD') AS market_cap_text, bi.fmt(v.enterprise_value, 'USD') AS ev_text,
                bi.fmt(v.net_debt, 'USD') AS net_debt_text,
-               COALESCE(to_char(v.pe, 'FM990.0') || 'x', 'n/m') AS pe_text,
-               COALESCE(to_char(v.ev_revenue, 'FM990.00') || 'x', 'n/m') AS ev_revenue_text,
-               COALESCE(to_char(v.pb, 'FM990.0') || 'x', 'n/m') AS pb_text,
-               to_char(v.return_1y_pct, 'SGFM9990.0') || '% 1Y' AS return_1y_text,
+               COALESCE(to_char(v.pe, 'FM990.0') || 'x', 'not meaningful (loss)') AS pe_text,
+               COALESCE(to_char(v.ev_revenue, 'FM990.00') || 'x', 'not available') AS ev_revenue_text,
+               COALESCE(to_char(v.pb, 'FM990.0') || 'x', 'not meaningful (negative equity)') AS pb_text,
+               to_char(v.return_1y_pct, 'SGFM9990.0') || '% in 1 year' AS return_1y_text,
                to_char(v.return_index_pct, 'SGFM9990.0') || '%' AS return_index_text,
                CASE WHEN v.return_1y_pct >= 0 THEN '#2E6B4F' ELSE '#A33A3A' END AS return_color,
                CASE WHEN v.return_1y_pct >= 0 THEN '#DCEBDF' ELSE '#F3D9D9' END AS return_bg,
-               'LAST 4Q TO ' || upper(to_char(v.ttm_end::date, 'DD Mon YY')) AS ttm_label,
-               'AT ' || upper(to_char(v.balance_date::date, 'DD Mon YY')) AS balance_label
+               'LAST 4 QUARTERS TO ' || upper(to_char(v.ttm_end::date, 'DD Mon YY')) AS ttm_label,
+               'BALANCE SHEET ' || upper(to_char(v.balance_date::date, 'DD Mon YY')) AS balance_label
         FROM gold.valuation v JOIN gold.dim_company c USING (ticker)
         LEFT JOIN (SELECT ticker, caveat FROM gold.sensitivity WHERE factor = 'jet_fuel') w USING (ticker)""",
 
@@ -185,13 +186,13 @@ FUNCTIONS = [
             WHEN unit = '%' THEN to_char(v, 'FM9990.0') || '%'
             ELSE to_char(v, 'FM999,990.00') END $$""",
     """CREATE OR REPLACE FUNCTION bi.reliability(method text, robust double precision) RETURNS text LANGUAGE sql IMMUTABLE AS $$
-        SELECT CASE WHEN method IS NULL OR method LIKE 'not%' THEN 'NOT MODELLED'
+        SELECT CASE WHEN method IS NULL OR method LIKE 'not%' THEN 'NO CLEAR LINK'
             WHEN method LIKE 'regression%' AND robust >= 80 THEN 'RELIABLE'
-            ELSE 'INDICATIVE' END $$""",
+            ELSE 'ROUGH ESTIMATE' END $$""",
     """CREATE OR REPLACE FUNCTION bi.pill_color(label text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
-        SELECT CASE label WHEN 'RELIABLE' THEN '#2E6B4F' WHEN 'INDICATIVE' THEN '#8A5A00' ELSE '#5F6670' END $$""",
+        SELECT CASE label WHEN 'RELIABLE' THEN '#2E6B4F' WHEN 'ROUGH ESTIMATE' THEN '#8A5A00' ELSE '#5F6670' END $$""",
     """CREATE OR REPLACE FUNCTION bi.pill_bg(label text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
-        SELECT CASE label WHEN 'RELIABLE' THEN '#DCEBDF' WHEN 'INDICATIVE' THEN '#FBEFD3' ELSE '#E6E2DC' END $$""",
+        SELECT CASE label WHEN 'RELIABLE' THEN '#DCEBDF' WHEN 'ROUGH ESTIMATE' THEN '#FBEFD3' ELSE '#E6E2DC' END $$""",
 ]
 
 

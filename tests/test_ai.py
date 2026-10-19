@@ -170,3 +170,20 @@ def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
     assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
     assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
     assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v2"
+
+
+
+def test_brief_can_be_about_any_company():
+    from dashboard.ai import settings_for
+    from dashboard.config import load_settings
+    from dashboard.insights import peer_insights
+    import pandas as pd
+    s = settings_for(load_settings(), "DAL")
+    assert s.focal_company == "DAL" and set(s.peers) == {"UAL", "AAL"}
+    pg = pd.DataFrame([{"kpi": "operating_margin_pct", "label": "Operating margin", "unit": "%", "better": "higher",
+                        "quarter_label": "Q2 2026", "ticker": t, "value": v, "rank": r, "n_companies": 3,
+                        "peer_avg": 99.0, "gap_vs_peer_avg": 99.0}            # focal-relative columns must be ignored
+                       for t, v, r in [("DAL", 9.0, 1), ("UAL", 6.0, 2), ("AAL", 3.0, 3)]])
+    ins = peer_insights(pg, "DAL")[0]
+    f = {x.id: x.value for x in ins.facts}
+    assert f["peer.operating_margin_pct.peer_avg"] == 4.5 and f["peer.operating_margin_pct.gap"] == 4.5

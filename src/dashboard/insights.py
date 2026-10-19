@@ -132,7 +132,14 @@ def peer_insights(pg: pd.DataFrame, focal: str, caveats: dict[str, str] | None =
     caveats = caveats or {}
     out = []
     for kpi, g in pg.groupby("kpi"):
-        f = g[g["ticker"] == focal].iloc[0]
+        if (g["ticker"] == focal).sum() == 0:
+            continue
+        f = g[g["ticker"] == focal].iloc[0].copy()
+        # peer average = the OTHER companies in this table (works for any company as the focal one;
+        # gold.peer_gap's own peer_avg column is relative to the configured focal company only)
+        others = g[g["ticker"] != focal]["value"]
+        f["peer_avg"] = others.mean()
+        f["gap_vs_peer_avg"] = f["value"] - f["peer_avg"]
         unit = f["unit"]
         gap_unit = "pp" if unit == "%" else unit
         rel = abs(f["gap_vs_peer_avg"]) / abs(f["peer_avg"]) if f["peer_avg"] else 0
