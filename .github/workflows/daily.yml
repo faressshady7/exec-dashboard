@@ -46,4 +46,8 @@ jobs:
         run: python -m dashboard.compute
       - name: 5 AI brief (stored, never frozen automatically)
         run: python -m dashboard.ai
+
+         - name: Keep Supabase awake
+        if: always()
+        run: python -c "from dashboard.db import engine; from sqlalchemy import text; c=engine().connect(); print('db ok:', c.execute(text('select now()')).scalar()); c.close()"
         
