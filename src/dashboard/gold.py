@@ -14,6 +14,8 @@ Facts
   fact_market      grain: one market variable x one observation date (incl. derived term spread)
   fact_filing      grain: one SEC filing (10-K / 10-Q / 8-K)
   fact_news        grain: one news article about one company (or the industry)
+  fact_stock       grain: one company x one trading day (closing price, volume)
+  fact_shares      grain: one company x one cover-page date (shares outstanding)
 
 Gold is rebuilt from silver in one transaction (small tables, < 1 minute), so it always
 matches silver exactly and a failed build leaves the old gold untouched.
@@ -38,6 +40,8 @@ GRAIN = {
     "fact_market": "one market variable x observation date",
     "fact_filing": "one SEC filing",
     "fact_news": "one kept article x company (or INDUSTRY), with source tier",
+    "fact_stock": "one company x trading day (close, volume)",
+    "fact_shares": "one company x cover-page date (shares outstanding)",
 }
 
 DDL = """
@@ -122,6 +126,22 @@ CREATE TABLE IF NOT EXISTS gold.fact_news (
     tier          SMALLINT                                          -- 1 major outlet, 2 trade press, 3 other
 );
 ALTER TABLE gold.fact_news ADD COLUMN IF NOT EXISTS tier SMALLINT;
+
+CREATE TABLE IF NOT EXISTS gold.fact_stock (
+    company_key  SMALLINT NOT NULL REFERENCES gold.dim_company,
+    date_key     INTEGER  NOT NULL REFERENCES gold.dim_date,
+    close        DOUBLE PRECISION NOT NULL,
+    volume       DOUBLE PRECISION,
+    PRIMARY KEY (company_key, date_key)
+);
+
+CREATE TABLE IF NOT EXISTS gold.fact_shares (
+    company_key  SMALLINT NOT NULL REFERENCES gold.dim_company,
+    date_key     INTEGER  NOT NULL REFERENCES gold.dim_date,
+    shares       DOUBLE PRECISION NOT NULL,
+    filed        DATE,
+    PRIMARY KEY (company_key, date_key)
+);
 """
 
 FINANCIAL_CATEGORY = {
@@ -218,6 +238,16 @@ FACT_SQL = {
         WHERE n.seen_at IS NOT NULL AND (n.seen_at AT TIME ZONE 'UTC')::date BETWEEN :start AND :end
           AND n.kept IS TRUE                                   -- only filtered articles reach gold
           AND (c.company_key IS NOT NULL OR n.company_key = 'INDUSTRY')""",
+    "fact_stock": """
+        INSERT INTO gold.fact_stock
+        SELECT c.company_key, to_char(p.trade_date, 'YYYYMMDD')::int, p.close, p.volume
+        FROM silver.stock_price p JOIN gold.dim_company c ON c.ticker = p.ticker
+        WHERE p.trade_date BETWEEN :start AND :end""",
+    "fact_shares": """
+        INSERT INTO gold.fact_shares
+        SELECT c.company_key, to_char(x.as_of, 'YYYYMMDD')::int, x.shares, x.filed
+        FROM silver.share_count x JOIN gold.dim_company c ON c.ticker = x.ticker
+        WHERE x.as_of BETWEEN :start AND :end""",
 }
 
 
@@ -246,6 +276,7 @@ def build(s: Settings, eng: Engine, today: date | None = None) -> dict[str, int]
     dates = date_rows(start, end)
     with eng.begin() as con:
         con.execute(text("TRUNCATE gold.fact_financials, gold.fact_market, gold.fact_filing, gold.fact_news, "
+                         "gold.fact_stock, gold.fact_shares, "
                          "gold.dim_company, gold.dim_variable, gold.dim_date RESTART IDENTITY"))
         con.execute(text("INSERT INTO gold.dim_company VALUES (:company_key, :ticker, :cik, :name, :industry, :role, :sort_order)"),
                     company_rows(s))

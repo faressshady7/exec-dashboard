@@ -18,6 +18,10 @@ Cleaning rules (each one is a thesis decision you can defend):
   Filings- 10-K, 10-Q, 8-K (+ amendments) with their 8-K item codes
            (2.02 = results of operations, i.e. an earnings release).
   News   - one row per (company, article URL); the same article fetched on two days is kept once.
+  Prices - one closing price per company per trading day (FMP; raw close, not dividend-adjusted).
+  Shares - shares outstanding from each 10-K/10-Q cover page (dei:EntityCommonStockSharesOutstanding),
+           dated at the cover date, newest filing wins. Used only for market cap.
+           A cover date later than the filing date (a typo in the filing) is replaced by the filing date.
 
 Run:  python -m dashboard.silver
 """
@@ -102,6 +106,26 @@ ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS relevant BOOLEAN;      
 ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS blocked BOOLEAN;        -- spam / content farm / state media
 ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS duplicate BOOLEAN;      -- same headline already kept
 ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS kept BOOLEAN;           -- relevant AND NOT blocked AND NOT duplicate
+
+CREATE TABLE IF NOT EXISTS silver.stock_price (
+    ticker      TEXT NOT NULL,
+    trade_date  DATE NOT NULL,
+    close       DOUBLE PRECISION NOT NULL,
+    volume      DOUBLE PRECISION,
+    loaded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (ticker, trade_date)
+);
+
+CREATE TABLE IF NOT EXISTS silver.share_count (
+    ticker     TEXT NOT NULL,
+    as_of      DATE NOT NULL,                -- cover-page date, usually a few weeks after quarter end
+    shares     DOUBLE PRECISION NOT NULL,
+    form       TEXT,
+    filed      DATE,
+    accn       TEXT,
+    loaded_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (ticker, as_of)
+);
 
 CREATE TABLE IF NOT EXISTS silver.load_log (
     run_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -305,6 +329,41 @@ def parse_news(raw: bytes, key: str) -> pd.DataFrame:
 
 
 # =========================================================================== news filter
+def parse_prices(raw: bytes, ticker: str, start: date) -> pd.DataFrame:
+    """FMP daily prices -> (ticker, trade_date, close, volume), one row per day."""
+    data = json.loads(raw)
+    if isinstance(data, dict):
+        data = data.get("historical", [])
+    rows = [{"ticker": ticker, "trade_date": r["date"], "close": float(r["close"]),
+             "volume": float(r["volume"]) if r.get("volume") is not None else None}
+            for r in data if r.get("date") and r.get("close") is not None]
+    df = pd.DataFrame(rows, columns=["ticker", "trade_date", "close", "volume"])
+    if df.empty:
+        return df
+    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+    df = df[(df["trade_date"] >= start) & (df["close"] > 0)]
+    return df.drop_duplicates(["ticker", "trade_date"], keep="last").reset_index(drop=True)
+
+
+def parse_shares(facts: dict, ticker: str) -> pd.DataFrame:
+    """Cover-page shares outstanding from 10-K/10-Q filings; newest filing wins per date."""
+    units = facts.get("facts", {}).get("dei", {}).get("EntityCommonStockSharesOutstanding", {}).get("units", {})
+    rows = [{"ticker": ticker, "as_of": e["end"], "shares": float(e["val"]), "form": e.get("form"),
+             "filed": e.get("filed"), "accn": e.get("accn")}
+            for e in units.get("shares", []) if e.get("form") in NUMBER_FORMS and e.get("val")]
+    df = pd.DataFrame(rows, columns=["ticker", "as_of", "shares", "form", "filed", "accn"])
+    if df.empty:
+        return df
+    df["as_of"] = pd.to_datetime(df["as_of"]).dt.date
+    df["filed"] = pd.to_datetime(df["filed"]).dt.date
+    # a cover date AFTER the filing date is a typo in the filing (found: AAL's Q2 2026 10-Q says
+    # 17 Jul 2027 instead of 2026) -> use the filing date, which is never earlier than the true count date
+    late = df["filed"].notna() & (df["as_of"] > df["filed"])
+    df.loc[late, "as_of"] = df.loc[late, "filed"]
+    df = df.sort_values("filed").drop_duplicates(["ticker", "as_of"], keep="last")
+    return df.sort_values("as_of").reset_index(drop=True)
+
+
 def _domain_in(domain: str, lst: list[str]) -> bool:
     d = (domain or "").lower().strip()
     return any(d == x or d.endswith("." + x) for x in lst)
@@ -398,6 +457,11 @@ def _log(eng: Engine, table: str, n: int, files: list[str]) -> None:
                     {"t": table, "n": n, "f": ", ".join(files)})
 
 
+def _concat(frames: list[pd.DataFrame]) -> pd.DataFrame:
+    frames = [x for x in frames if not x.empty]
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
 # =========================================================================== run
 def run(s: Settings, eng: Engine, bronze: Path) -> dict:
     ensure_tables(eng)
@@ -425,12 +489,14 @@ def run(s: Settings, eng: Engine, bronze: Path) -> dict:
     _log(eng, "fred_observation", report["fred_observation"], sorted(set(files)))
 
     # ---- SEC numbers + filings
-    facts_frames, filing_frames, files = [], [], []
+    facts_frames, filing_frames, share_frames, files = [], [], [], []
     for c in s.in_scope:
         folder = f"{c.ticker}_{c.cik10}"
         f = latest_file(bronze / "sec" / "companyfacts" / folder, "*.json")
         if f:
-            facts_frames.append(build_sec_facts(json.loads(f.read_bytes()), c.ticker, s))
+            facts_json = json.loads(f.read_bytes())
+            facts_frames.append(build_sec_facts(facts_json, c.ticker, s))
+            share_frames.append(parse_shares(facts_json, c.ticker))
             files.append(f"{folder}/{f.name}")
         g = latest_file(bronze / "sec" / "submissions" / folder, "*.json")
         if g:
@@ -440,6 +506,19 @@ def run(s: Settings, eng: Engine, bronze: Path) -> dict:
     report["sec_fact"] = upsert(eng, "silver.sec_fact", facts, ["ticker", "metric", "period_type", "period_end"])
     report["filing"] = upsert(eng, "silver.filing", filings, ["accn"])
     _log(eng, "sec_fact", report["sec_fact"], files)
+    shares = _concat(share_frames)
+    report["share_count"] = upsert(eng, "silver.share_count", shares, ["ticker", "as_of"])
+
+    # ---- Share prices (only if bronze has them: needs FMP_API_KEY)
+    frames, files = [], []
+    for c in s.in_scope:
+        f = latest_file(bronze / "prices" / "fmp" / c.ticker, "*.json")
+        if f:
+            frames.append(parse_prices(f.read_bytes(), c.ticker, start))
+            files.append(f"{c.ticker}/{f.name}")
+    prices = _concat(frames)
+    report["stock_price"] = upsert(eng, "silver.stock_price", prices, ["ticker", "trade_date"])
+    _log(eng, "stock_price", report["stock_price"], files)
 
     # ---- News
     frames = []

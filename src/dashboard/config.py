@@ -174,6 +174,14 @@ class MethodSettings(BaseModel):
         return (self.covid_start, self.covid_end) if self.exclude_covid else None
 
 
+class StockSettings(BaseModel):
+    """Daily share prices (Peer Benchmark page). FMP free plan: 250 calls/day, ~5 years of history,
+    personal use. The API key is read from the environment variable FMP_API_KEY (.env), never from here."""
+    source: Literal["fmp"] = "fmp"
+    history_years: int = Field(default=5, ge=1, le=5)
+    index_years: int = Field(default=3, ge=1, le=5)     # performance chart: start of window = 100
+
+
 class Settings(BaseModel):
     project: Project
     focal_company: str
@@ -187,6 +195,7 @@ class Settings(BaseModel):
     news_filter: NewsFilter = NewsFilter()
     method: MethodSettings = MethodSettings()
     scenarios: list[HistoricalScenario] = []
+    stocks: StockSettings = StockSettings()
 
     @model_validator(mode="after")
     def check_references(self):

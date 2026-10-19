@@ -1,10 +1,12 @@
 """Step 2 - Bronze layer: download raw data and save it UNTOUCHED.
 
-Sources (all free, no API key):
-  FRED  - one CSV per risk factor in settings.yaml
-  SEC   - companyfacts JSON (every XBRL number from 10-K / 10-Q filings)
+Sources (all free):
+  FRED  - one CSV per risk factor in settings.yaml                         (no key)
+  SEC   - companyfacts JSON (every XBRL number from 10-K / 10-Q filings)  (no key)
         - submissions JSON (filing history: latest 10-Q / 10-K, and 8-K announcements)
-  GDELT - news articles per company + one industry query (last N days)
+  GDELT - news articles per company + one industry query (last N days)    (no key)
+  FMP   - daily share prices per company (free key in .env as FMP_API_KEY; skipped if missing).
+          The key is masked in every log line and file: it never leaves .env.
 
 Rules of the bronze layer
   1. Never edit raw data. Files are saved exactly as received.
@@ -22,6 +24,7 @@ import csv
 import hashlib
 import io
 import json
+import os
 import time
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
@@ -38,6 +41,8 @@ SEC_FACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik10}.json"
 SEC_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik10}.json"
 GDELT_URL = ("https://api.gdeltproject.org/api/v2/doc/doc?query={query}&mode=artlist"
              "&format=json&maxrecords={n}&sort=DateDesc&timespan={days}d")
+FMP_URL = ("https://financialmodelingprep.com/stable/historical-price-eod/full"
+           "?symbol={symbol}&from={start}&to={end}&apikey={key}")
 FILING_FORMS = {"10-K", "10-Q", "10-K/A", "10-Q/A"}
 
 
@@ -146,6 +151,40 @@ def parse_gdelt(raw: bytes) -> tuple[int, Optional[str]]:
     return len(articles), (f"{latest[:4]}-{latest[4:6]}-{latest[6:]}" if latest else None)
 
 
+def parse_fmp_prices(raw: bytes, symbol: str) -> tuple[int, Optional[str]]:
+    """Return (number of trading days, latest date). FMP answers errors (bad key, plan limit)
+    with a JSON object or text instead of a list, which raises here."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError(f"FMP did not return JSON: {raw[:80]!r}")
+    if isinstance(data, dict):                    # {"Error Message": "..."} or {"historical": [...]}
+        data = data.get("historical", data)
+    if not isinstance(data, list):
+        raise ValueError(f"FMP error: {str(data)[:120]}")
+    rows = [r for r in data if r.get("date") and r.get("close") is not None]
+    if not rows:
+        raise ValueError(f"FMP returned no prices for {symbol}")
+    bad = {r.get("symbol") for r in rows if r.get("symbol")} - {symbol}
+    if bad:
+        raise ValueError(f"FMP returned prices for {bad}, expected {symbol}")
+    return len(rows), max(r["date"] for r in rows)
+
+
+def fmp_key() -> str:
+    from dotenv import load_dotenv
+    from dashboard.config import PROJECT_ROOT
+    load_dotenv(PROJECT_ROOT / ".env")
+    key = os.environ.get("FMP_API_KEY", "").strip().strip('"').strip("'")
+    if key.upper().startswith("FMP_API_KEY="):          # pasted the whole .env line as a secret
+        key = key.split("=", 1)[1].strip().strip('"').strip("'")
+    return key
+
+
+def _mask(text: str, secret: str) -> str:
+    return text.replace(secret, "*****") if secret else text
+
+
 # --------------------------------------------------------------------------- saving
 def _save(out_dir: Path, rel: str, raw: bytes) -> tuple[str, str]:
     path = out_dir / rel
@@ -246,6 +285,33 @@ def fetch_news(s: Settings, f: Fetcher, out_dir: Path, today: str, force=False) 
     return results
 
 
+def fetch_prices(s: Settings, f: Fetcher, out_dir: Path, today: str, force=False,
+                 key: str = "") -> list[FetchResult]:
+    """One FMP call per company: ~5 years of daily prices. No key -> skipped (nothing else breaks)."""
+    if not key:
+        return []
+    end = date.fromisoformat(today)
+    start = end.replace(year=end.year - s.stocks.history_years)
+    results = []
+    for c in s.in_scope:
+        rel = f"prices/fmp/{c.ticker}/{today}.json"
+        url = FMP_URL.format(symbol=c.ticker, start=start, end=end, key=key)
+        res = FetchResult("prices", c.ticker, "OK", url=_mask(url, key), frequency="daily")
+        try:
+            if _already_fetched(out_dir, rel, force):
+                raw, res.status, res.path = (out_dir / rel).read_bytes(), "SKIPPED", rel
+            else:
+                raw = f.get(url)
+            n, res.latest = parse_fmp_prices(raw, c.ticker)       # validate BEFORE saving
+            if res.status == "OK":
+                res.path, res.sha256 = _save(out_dir, rel, raw)
+            res.bytes, res.detail = len(raw), f"{n} trading days"
+        except Exception as e:
+            res.status, res.detail = "FAILED", _mask(str(e), key)
+        results.append(res)
+    return results
+
+
 # --------------------------------------------------------------------------- freshness
 def freshness(results: list[FetchResult], s: Settings, today: date) -> list[dict]:
     report = []
@@ -265,14 +331,18 @@ def freshness(results: list[FetchResult], s: Settings, today: date) -> list[dict
 
 # --------------------------------------------------------------------------- run
 def run(s: Settings, fetcher: Fetcher, out_dir: Path, today: Optional[date] = None,
-        force: bool = False, news_fetcher: Optional[Fetcher] = None) -> tuple[list[FetchResult], list[dict]]:
+        force: bool = False, news_fetcher: Optional[Fetcher] = None,
+        price_key: Optional[str] = None) -> tuple[list[FetchResult], list[dict]]:
     today = today or date.today()
     stamp = today.isoformat()
     out_dir.mkdir(parents=True, exist_ok=True)
 
     results = (fetch_fred(s, fetcher, out_dir, stamp, force)
                + fetch_sec(s, fetcher, out_dir, stamp, force)
-               + fetch_news(s, news_fetcher or fetcher, out_dir, stamp, force))
+               + fetch_news(s, news_fetcher or fetcher, out_dir, stamp, force)
+               + fetch_prices(s, Fetcher("exec-dashboard thesis", session=fetcher.session,   # no SEC email sent to FMP
+                                         backoff=fetcher.backoff, min_interval=fetcher.min_interval),
+                              out_dir, stamp, force, key=price_key or ""))
 
     with open(out_dir / "_manifest.jsonl", "a", encoding="utf-8") as fh:   # append-only log
         for r in results:
@@ -298,6 +368,8 @@ def _print(results: list[FetchResult], report: list[dict]) -> None:
     failed = sum(r.status == "FAILED" for r in results)
     stale = sum(x["status"] == "STALE" for x in report)
     print(f"\n{len(results)} downloads · {failed} failed · {stale} stale")
+    if not any(r.source == "prices" for r in results):
+        print("Share prices skipped: FMP_API_KEY is not set (run set_fmp_key.bat, or add the GitHub secret).")
 
 
 def main() -> None:
@@ -311,7 +383,8 @@ def main() -> None:
     print("Downloading... (news is slow on purpose: GDELT blocks fast requests, about 1 minute)")
     # GDELT throttles bursts with HTTP 429 even at 1 request / 5 s, so go slower and wait longer
     news = Fetcher(s.project.sec_user_agent, min_interval=10.0, backoff=15.0, retries=4)
-    results, report = run(s, Fetcher(s.project.sec_user_agent), out, force=args.force, news_fetcher=news)
+    results, report = run(s, Fetcher(s.project.sec_user_agent), out, force=args.force, news_fetcher=news,
+                          price_key=fmp_key())
     _print(results, report)
     print(f"Saved to: {out}")
 

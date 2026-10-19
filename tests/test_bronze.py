@@ -169,3 +169,38 @@ def test_old_news_is_flagged_stale(settings, tmp_path):
     session = FakeSession(all_routes(settings, gdeltproject=FakeResponse(200, gdelt("20261001T000000Z"))))
     _, report = run(settings, fast_fetcher(session), tmp_path, today=TODAY)
     assert all(x["status"] == "STALE" for x in report if x["source"] == "news")
+
+
+# ---------------------------------------------------------------- share prices (FMP)
+def fmp(symbol, days=("2026-10-16", "2026-10-15")):
+    return json.dumps([{"symbol": symbol, "date": d, "open": 1, "high": 1, "low": 1, "close": 50.0,
+                        "volume": 1000} for d in days]).encode()
+
+
+def test_prices_skipped_without_key(settings, tmp_path):
+    results, _ = run(settings, fast_fetcher(FakeSession(all_routes(settings))), tmp_path, today=TODAY)
+    assert not any(r.source == "prices" for r in results)
+
+
+def test_prices_saved_and_key_never_logged(settings, tmp_path):
+    routes = all_routes(settings, **{f"symbol={c.ticker}&": FakeResponse(200, fmp(c.ticker)) for c in settings.in_scope})
+    session = FakeSession(routes)
+    results, report = run(settings, fast_fetcher(session), tmp_path, today=TODAY, price_key="SECRET123")
+    prices = [r for r in results if r.source == "prices"]
+    assert [r.status for r in prices] == ["OK"] * 3 and prices[0].latest == "2026-10-16"
+    assert (tmp_path / "prices/fmp/UAL/2026-10-19.json").read_bytes() == fmp("UAL")
+    assert "SECRET123" not in (tmp_path / "_manifest.jsonl").read_text()          # masked in the log
+    fmp_calls = [h for u, h in session.calls if "financialmodelingprep" in u]
+    assert all("@" not in h["User-Agent"] for h in fmp_calls)                      # SEC email not sent to FMP
+    assert any(x["source"] == "prices" and x["status"] == "OK" for x in report)
+
+
+def test_prices_error_is_failed_and_masked(settings, tmp_path):
+    bad = FakeResponse(200, json.dumps({"Error Message": "Invalid API KEY"}).encode())
+    routes = all_routes(settings, financialmodelingprep=bad)
+    results, _ = run(settings, fast_fetcher(FakeSession(routes)), tmp_path, today=TODAY, price_key="SECRET123")
+    prices = [r for r in results if r.source == "prices"]
+    assert all(r.status == "FAILED" and "Invalid API KEY" in r.detail for r in prices)
+    denied = all_routes(settings, financialmodelingprep=FakeResponse(401))
+    results, _ = run(settings, fast_fetcher(FakeSession(denied)), tmp_path, today=TODAY, price_key="SECRET123", force=True)
+    assert all("SECRET123" not in r.detail and "SECRET123" not in r.url for r in results)

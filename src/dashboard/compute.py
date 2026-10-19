@@ -406,11 +406,18 @@ def run(s: Settings, eng: Engine) -> dict[str, pd.DataFrame]:
     rob, share = robustness(fin, mkt, s, base=sens)
     sens = sens.merge(share, on=["ticker", "factor"], how="left")       # robust_pct travels to the AI as a fact
     ranges = past_ranges(mkt)
+    from dashboard.valuation import load_stock, stock_index, valuation
+    try:
+        prices, shares = load_stock(eng)
+    except Exception:                      # gold not rebuilt since the stock tables were added
+        prices, shares = pd.DataFrame(columns=["ticker", "trade_date", "close"]), pd.DataFrame()
     out = {"kpi_quarterly": kpis, "peer_gap": peer_gaps(kpis, s), "market_snapshot": market_snapshot(mkt),
            "sensitivity": sens, "scenario": scenario_grid(sens, ranges, historical_moves(mkt, s)),
            "robustness": rob,
            "past_range": pd.DataFrame([{"code": k, "low": lo, "high": hi} for k, (lo, hi) in ranges.items()],
-                                      columns=["code", "low", "high"])}
+                                      columns=["code", "low", "high"]),
+           "stock_index": stock_index(prices, s.stocks.index_years),
+           "valuation": valuation(prices, shares, fin, s)}
     from dashboard.bi import create_views, drop_views
     with eng.begin() as con:
         drop_views(con)                    # Power BI views sit on these tables; rebuilt right after

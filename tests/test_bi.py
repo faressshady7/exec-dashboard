@@ -13,7 +13,8 @@ DB = os.environ.get("TEST_DATABASE_URL")
 
 def test_every_view_is_defined():
     assert {"kpi_latest", "kpi_trend", "market_today", "market_history", "whatif", "scenarios",
-            "robustness", "assumptions", "news", "ai_brief", "freshness", "companies"} == set(VIEWS)
+            "robustness", "assumptions", "news", "ai_brief", "freshness", "companies",
+            "stock_history", "valuation"} == set(VIEWS)
 
 
 @pytest.mark.skipif(not DB, reason="set TEST_DATABASE_URL to run database tests")
@@ -50,6 +51,10 @@ def test_views_build_on_gold_tables_and_survive_recompute():
               "sensitivity": sens, "scenario": scenario_grid(sens, ranges, historical_moves(mkt, s)),
               "robustness": pd.DataFrame({"parameter": ["fuel_min_r2"], "same_result": [True]}),
               "past_range": pd.DataFrame([{"code": k, "low": lo, "high": hi} for k, (lo, hi) in ranges.items()])}
+    from dashboard.valuation import stock_index, valuation
+    from test_valuation import fin as vfin, prices as vprices, shares as vshares
+    tables["stock_index"] = stock_index(vprices(), 3)
+    tables["valuation"] = valuation(vprices(), vshares(), vfin(), s)
 
     def write_all():
         with eng.begin() as con:
@@ -75,7 +80,12 @@ def test_views_build_on_gold_tables_and_survive_recompute():
         brief = con.execute(text("SELECT headline, check_passed FROM bi.ai_brief")).one()
         n_assump = con.execute(text("SELECT count(*) FROM bi.assumptions")).scalar()
         hist = con.execute(text("SELECT count(*) FROM bi.scenarios WHERE scenario_type = 'historical'")).scalar()
+        val = con.execute(text("SELECT ticker, pe, caveat FROM bi.valuation ORDER BY sort_order")).all()
+        idx0 = con.execute(text("SELECT min(index_100), count(DISTINCT ticker) FROM bi.stock_history "
+                                "WHERE trade_date = (SELECT min(trade_date) FROM bi.stock_history)")).one()
     assert views == set(VIEWS)
     assert [r.ticker for r in w] == ["UAL", "DAL", "AAL"] and w[0].fuel_impact_per_pct == pytest.approx(-30e6)
     assert w[0].fuel_past_high_pct > 0 and "refinery" in w[1].caveat
+    assert [r.ticker for r in val] == ["UAL", "DAL", "AAL"] and val[2].pe is None and "refinery" in val[1].caveat
+    assert idx0 == (pytest.approx(100), 3)
     assert brief == ("H", True) and n_assump == 4 and hist == 3   # only "Last 12 months, again" has data here: 1 per company

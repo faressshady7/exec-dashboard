@@ -1,7 +1,7 @@
 # Daily pipeline: refreshes the data AND keeps the free Supabase project awake
 # (Supabase pauses free projects after 7 days without database activity).
 # Runs every day at ~06:15 Cairo time; can also be started by hand (Actions tab -> Run workflow).
-# Secrets needed (repo Settings -> Secrets and variables -> Actions): DATABASE_URL, GEMINI_API_KEY.
+# Secrets needed (repo Settings -> Secrets and variables -> Actions): DATABASE_URL, GEMINI_API_KEY, FMP_API_KEY.
 name: daily-pipeline
 
 on:
@@ -20,6 +20,7 @@ jobs:
     env:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
       PYTHONPATH: src
       PYTHONUNBUFFERED: "1"
     steps:
@@ -34,6 +35,7 @@ jobs:
         run: |
           if [ -z "$DATABASE_URL" ]; then echo "::error::DATABASE_URL secret is missing"; exit 1; fi
           if [ -z "$GEMINI_API_KEY" ]; then echo "::warning::GEMINI_API_KEY missing - the AI step will fail"; fi
+          if [ -z "$FMP_API_KEY" ]; then echo "::warning::FMP_API_KEY missing - share prices are skipped"; fi
 
       - name: Install libraries
         run: pip install -q -r requirements.txt

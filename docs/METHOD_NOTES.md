@@ -81,6 +81,21 @@ The daily GitHub run stores one brief per day, which builds the evaluation sampl
 Students and professionals act as proxy users for executives; state it as a limitation and, if
 possible, report results separately for professionals.
 
+## 9. Share prices and valuation (Peer Benchmark page)
+- **Source:** Financial Modeling Prep (FMP) free plan, end-of-day closes, about 5 years; 3 calls a day.
+  Shares outstanding from each 10-K/10-Q cover page (SEC `dei:EntityCommonStockSharesOutstanding`).
+- **Definitions:** index = close / close on the first common day of the 3-year window x 100;
+  market cap = latest close x latest reported shares; EV = market cap + net debt (long-term debt - cash);
+  P/E on the last 4 quarters' net income (blank when a loss); EV/Revenue on the last 4 quarters;
+  P/B blank when equity is negative.
+- **Data fix:** one filing had an impossible cover date (AAL Q2 2026 10-Q: 17 Jul 2027, filed Jul 2026);
+  a cover date later than the filing date is replaced by the filing date.
+- **Limitations:** raw closes, not dividend-adjusted (Delta pays a small dividend, so its return is
+  slightly understated); net debt excludes leases and current debt, so EV is understated for all three
+  in the same way; FMP free data is for personal use, cited as a data source.
+> "Share prices are daily closes from Financial Modeling Prep; valuation multiples use standard
+> trailing-four-quarter definitions and are left blank where not meaningful (losses, negative equity)."
+
 ---
 
 # Verified references (peer-reviewed, 2021-2026 unless marked)
@@ -118,7 +133,8 @@ uses the same infectious-disease index), Atems & Yimga 2021 (JATM 97), Cai, Zhan
 ## Data sources (cite as data, not as evidence - age rule does not apply)
 - Baker, Bloom & Davis (2016), *QJE* 131(4) - economic policy uncertainty and EMV trackers (FRED).
 - Caldara & Iacoviello (2022), *AER* 112(4) - geopolitical risk index (planned).
-- FRED (Federal Reserve Bank of St. Louis); SEC EDGAR XBRL company facts; GDELT DOC 2.0.
+- FRED (Federal Reserve Bank of St. Louis); SEC EDGAR XBRL company facts; GDELT DOC 2.0;
+  Financial Modeling Prep (end-of-day share prices).
 
 ## Classics (theory and definitions only - confirm with Dr. Minar)
 Simon (1947, 1960); Sweller (1988); Shneiderman (1996); Tufte (2001); Eppler & Mengis (2004);

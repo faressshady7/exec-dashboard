@@ -234,3 +234,22 @@ def test_news_audit_scores_precision_per_tier(tmp_path):
     res = score(p)
     assert res.loc[2, "precision"] == 0.5 and res.loc[3, "precision"] == 1.0
     assert res.loc["all", "rated"] == 4                 # blank answers are ignored
+
+
+def test_prices_and_cover_page_shares():
+    import json as _j
+    from datetime import date as _d
+    from dashboard.silver import parse_prices, parse_shares
+    raw = _j.dumps([{"symbol": "UAL", "date": "2026-10-16", "close": 60.5, "volume": 10},
+                    {"symbol": "UAL", "date": "2014-01-02", "close": 40.0, "volume": 10},   # before start_date
+                    {"symbol": "UAL", "date": "2026-10-15", "close": None}]).encode()
+    p = parse_prices(raw, "UAL", _d(2015, 1, 1))
+    assert len(p) == 1 and p["close"].iloc[0] == 60.5
+    facts = {"facts": {"dei": {"EntityCommonStockSharesOutstanding": {"units": {"shares": [
+        {"end": "2026-04-16", "val": 300, "form": "10-Q", "filed": "2026-04-22"},
+        {"end": "2026-04-16", "val": 301, "form": "10-Q/A", "filed": "2026-05-01"},   # amendment wins
+        {"end": "2026-05-01", "val": 999, "form": "S-8", "filed": "2026-05-02"},     # not a 10-K/10-Q
+        {"end": "2027-07-17", "val": 302, "form": "10-Q", "filed": "2026-07-23"}]}}}}}  # typo in the filing
+    sh = parse_shares(facts, "UAL")
+    assert sh["shares"].tolist() == [301.0, 302.0] and str(sh["as_of"].iloc[-1]) == "2026-07-23"
+    assert parse_shares({"facts": {}}, "UAL").empty

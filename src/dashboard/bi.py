@@ -82,6 +82,18 @@ VIEWS: dict[str, str] = {
                check_passed, fallback_used, wording_flags::text AS wording_flags, frozen
         FROM ai.brief ORDER BY frozen DESC, created_at DESC LIMIT 1""",
 
+    # Peer Benchmark: share prices rebased to 100 at the start of the window (empty until FMP_API_KEY is set)
+    "stock_history": """
+        SELECT c.ticker, c.name AS company, c.role, c.sort_order, i.trade_date::date AS trade_date,
+               i.close, i.index_100
+        FROM gold.stock_index i JOIN gold.dim_company c USING (ticker)""",
+
+    # Peer Benchmark: market cap, EV and multiples, one row per company (+ the comparability caveat)
+    "valuation": """
+        SELECT c.name AS company, c.role, c.sort_order, v.*, w.caveat
+        FROM gold.valuation v JOIN gold.dim_company c USING (ticker)
+        LEFT JOIN (SELECT ticker, caveat FROM gold.sensitivity WHERE factor = 'jet_fuel') w USING (ticker)""",
+
     # Header: "Data as of ..."
     "freshness": """
         SELECT v.label, v.scope, v.frequency, max(d.full_date) AS latest_date
