@@ -144,3 +144,14 @@ def test_robustness_table_and_share():
     assert {"fuel_min_r2", "rate_min_r2", "exclude_covid", "unusual_sigma"} <= set(rob["parameter"])
     ual_fuel = share.query("ticker == 'UAL' and factor == 'jet_fuel'")["robust_pct"].iloc[0]
     assert ual_fuel == 100                     # perfect synthetic fit: no threshold changes the result
+
+
+def test_sensitivity_text_is_framed_as_an_estimate():
+    from dashboard.insights import exposure_insights
+    s = load_settings()
+    q = quarters(12)
+    px = pd.Series(np.linspace(1.5, 3.0, 12), index=q)
+    fin = pd.concat([fin_frame(t, "focal" if t == "UAL" else "peer", fuel_px=px.to_numpy())
+                     for t in ("UAL", "DAL", "AAL")], ignore_index=True)
+    fuel = next(i for i in exposure_insights(sensitivities(fin, market_frame(px), s), "UAL") if i.id == "exposure:jet_fuel")
+    assert fuel.summary.startswith("Based on past quarters") and "estimated" in fuel.summary and " would " not in fuel.summary

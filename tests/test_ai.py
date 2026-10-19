@@ -162,3 +162,11 @@ def test_flags_are_stored_but_do_not_block_a_correct_brief():
     assert res.check.passed and not res.fallback_used                          # numbers fine -> brief kept
     assert res.flags == ["exaggeration: record", "cause: because"]             # ...but counted as possible claim error
     assert res.attempts[0]["flags"] == res.flags
+
+
+def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
+    from dashboard.ai import SYSTEM, PROMPT_VERSION
+    terms = load_settings().ai.flag_terms
+    assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
+    assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
+    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v2"

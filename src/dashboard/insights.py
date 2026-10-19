@@ -209,7 +209,7 @@ def exposure_insights(sens: pd.DataFrame, focal: str) -> list[Insight]:
             facts.append(Fact(f"exposure.fuel.{t}", f"{t} change for +10% jet fuel", p["impact_per_unit_q"] * 10, "USD"))
         out.append(Insight(
             id="exposure:jet_fuel", type="exposure", title="Exposure to jet fuel",
-            summary=(f"A 10% rise in jet fuel would reduce {focal} quarterly operating income by about "
+            summary=(f"Based on past quarters, a 10% rise in jet fuel is estimated to reduce {focal} quarterly operating income by about "
                      f"{fmt(abs(imp10), 'USD')}, against a base of {facts[1].display()}."
                      + _caveat_text(fuel.get("caveat", pd.Series(dtype=str)).fillna("").to_dict(), fuel.index)),
             facts=facts, significance=_clip(share * 2), impact=1.0,      # a 10% shock removing >=50% of profit = maximal
@@ -220,7 +220,7 @@ def exposure_insights(sens: pd.DataFrame, focal: str) -> list[Insight]:
         imp = r["impact_per_unit_q"] * 100
         out.append(Insight(
             id="exposure:fed_funds", type="exposure", title="Exposure to interest rates",
-            summary=f"A 1-point (100bp) rise in rates would add about {fmt(abs(imp), 'USD')} a quarter to {focal} interest costs (indicative; R-squared {r['r2']:.2f}).",
+            summary=f"Based on past quarters, a 1-point (100bp) rise in rates is linked to about {fmt(abs(imp), 'USD')} more {focal} interest cost a quarter (indicative; R-squared {r['r2']:.2f}).",
             facts=[Fact("exposure.rates.impact_100bp", f"{focal} quarterly cost of +100bp rates", imp, "USD"),
                    Fact("exposure.rates.r2", "Fit of interest expense vs fed funds (R-squared)", r["r2"], "index")]
                   + ([Fact("exposure.rates.robust_pct", "Share of alternative model settings giving the same rate result",

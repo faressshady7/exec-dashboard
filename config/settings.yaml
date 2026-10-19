@@ -283,4 +283,5 @@ ai:
   flag_terms:
     exaggeration: [historic, record, unprecedented, crisis, collapse, soaring, plunge, plunging, skyrocketing, massive]
     cause: [because, due to, driven by, caused by, as a result of, thanks to, led to]
+    certainty: [will reduce, will cost, will cut, will increase, will raise, will lower, guaranteed, certainly]
 
