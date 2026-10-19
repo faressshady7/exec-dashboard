@@ -223,3 +223,14 @@ def test_news_filter_tags_relevance_tier_block_and_duplicates():
     assert out.loc["u4", "blocked"] and not out.loc["u4", "kept"]            # stock-spam site
     assert out.loc["u5", "kept"] and out.loc["u5", "tier"] == 2              # ticker as a whole word
     assert out.loc["i1", "kept"] and out.loc["i1", "tier"] == 3
+
+
+def test_news_audit_scores_precision_per_tier(tmp_path):
+    import pandas as pd
+    from dashboard.news_audit import score
+    p = tmp_path / "audit.csv"
+    pd.DataFrame({"relevant": ["y", "n", "Y", "yes", ""], "tier": [2, 2, 3, 3, 3],
+                  "title": list("abcde")}).to_csv(p, index=False)
+    res = score(p)
+    assert res.loc[2, "precision"] == 0.5 and res.loc[3, "precision"] == 1.0
+    assert res.loc["all", "rated"] == 4                 # blank answers are ignored
