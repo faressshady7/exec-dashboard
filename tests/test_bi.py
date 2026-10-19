@@ -14,7 +14,7 @@ DB = os.environ.get("TEST_DATABASE_URL")
 def test_every_view_is_defined():
     assert {"kpi_latest", "kpi_trend", "market_today", "market_history", "whatif", "scenarios",
             "robustness", "assumptions", "news", "ai_brief", "freshness", "companies",
-            "stock_history", "valuation"} == set(VIEWS)
+            "stock_history", "valuation", "attention"} == set(VIEWS)
 
 
 @pytest.mark.skipif(not DB, reason="set TEST_DATABASE_URL to run database tests")
@@ -22,8 +22,8 @@ def test_views_build_on_gold_tables_and_survive_recompute():
     from sqlalchemy import create_engine, text
     from dashboard.ai import MockLLM, Round1, generate, store
     from dashboard.bi import create_views, drop_views
-    from dashboard.compute import (compute_kpis, historical_moves, past_ranges, peer_gaps, scenario_grid,
-                                   sensitivities)
+    from dashboard.compute import (compute_kpis, historical_moves, market_snapshot, past_ranges, peer_gaps,
+                                   scenario_grid, sensitivities)
     from dashboard.config import load_settings
     from dashboard.gold import DDL, company_rows
     from dashboard.insights import Fact, Insight
@@ -55,6 +55,9 @@ def test_views_build_on_gold_tables_and_survive_recompute():
     from test_valuation import fin as vfin, prices as vprices, shares as vshares
     tables["stock_index"] = stock_index(vprices(), 3)
     tables["valuation"] = valuation(vprices(), vshares(), vfin(), s)
+    from dashboard.attention import attention
+    tables["attention"] = attention(kpis, tables["peer_gap"], market_snapshot(mkt), sens, tables["valuation"], s)
+    tables["market_snapshot"] = market_snapshot(mkt)
 
     def write_all():
         with eng.begin() as con:
@@ -80,7 +83,11 @@ def test_views_build_on_gold_tables_and_survive_recompute():
         brief = con.execute(text("SELECT headline, check_passed FROM bi.ai_brief")).one()
         n_assump = con.execute(text("SELECT count(*) FROM bi.assumptions")).scalar()
         hist = con.execute(text("SELECT count(*) FROM bi.scenarios WHERE scenario_type = 'historical'")).scalar()
-        val = con.execute(text("SELECT ticker, pe, caveat FROM bi.valuation ORDER BY sort_order")).all()
+        val = con.execute(text("SELECT ticker, pe, caveat, pe_text, market_cap_text FROM bi.valuation ORDER BY sort_order")).all()
+        kl = con.execute(text("SELECT ticker, status, value_text FROM bi.kpi_latest WHERE kpi = 'net_debt' ORDER BY sort_order")).all()
+        att = con.execute(text("SELECT page, rank, severity, badge, box_bg FROM bi.attention ORDER BY page, rank")).all()
+        wi2 = con.execute(text("SELECT fuel_reliability, fuel_impact_10pct_text FROM bi.whatif ORDER BY sort_order")).first()
+        mt = con.execute(text("SELECT latest_text, position_label FROM bi.market_today")).first()
         idx0 = con.execute(text("SELECT min(index_100), count(DISTINCT ticker) FROM bi.stock_history "
                                 "WHERE trade_date = (SELECT min(trade_date) FROM bi.stock_history)")).one()
     assert views == set(VIEWS)
@@ -88,4 +95,10 @@ def test_views_build_on_gold_tables_and_survive_recompute():
     assert w[0].fuel_past_high_pct > 0 and "refinery" in w[1].caveat
     assert [r.ticker for r in val] == ["UAL", "DAL", "AAL"] and val[2].pe is None and "refinery" in val[1].caveat
     assert idx0 == (pytest.approx(100), 3)
+    assert val[2].pe_text == "n/m" and val[0].market_cap_text.startswith("$") and val[0].market_cap_text.endswith("B")
+    assert {r.status for r in kl} <= {"BETTER THAN PEERS", "WORSE THAN PEERS", "IN LINE"} and kl[0].value_text.endswith("B")
+    assert {r.page for r in att} == {"brief", "peer", "risk"} and att[0].rank == 1
+    assert any(r.severity == "MODERATE" and r.page == "peer" for r in att)       # Delta refinery caveat
+    assert wi2.fuel_impact_10pct_text.startswith("-$") and wi2.fuel_reliability in ("RELIABLE", "INDICATIVE")
+    assert mt.latest_text and mt.position_label
     assert brief == ("H", True) and n_assump == 4 and hist == 3   # only "Last 12 months, again" has data here: 1 per company

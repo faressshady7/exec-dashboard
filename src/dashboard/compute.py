@@ -427,13 +427,16 @@ def run(s: Settings, eng: Engine) -> dict[str, pd.DataFrame]:
         prices, shares = load_stock(eng)
     except Exception:                      # gold not rebuilt since the stock tables were added
         prices, shares = pd.DataFrame(columns=["ticker", "trade_date", "close"]), pd.DataFrame()
-    out = {"kpi_quarterly": kpis, "peer_gap": peer_gaps(kpis, s), "market_snapshot": market_snapshot(mkt),
+    pg, snap = peer_gaps(kpis, s), market_snapshot(mkt)
+    out = {"kpi_quarterly": kpis, "peer_gap": pg, "market_snapshot": snap,
            "sensitivity": sens, "scenario": scenario_grid(sens, ranges, historical_moves(mkt, s)),
            "robustness": rob,
            "past_range": pd.DataFrame([{"code": k, "low": lo, "high": hi} for k, (lo, hi) in ranges.items()],
                                       columns=["code", "low", "high"]),
            "stock_index": stock_index(prices, s.stocks.index_years),
            "valuation": valuation(prices, shares, fin, s)}
+    from dashboard.attention import attention
+    out["attention"] = attention(kpis, pg, snap, sens, out["valuation"], s)
     from dashboard.bi import create_views, drop_views
     with eng.begin() as con:
         drop_views(con)                    # Power BI views sit on these tables; rebuilt right after
