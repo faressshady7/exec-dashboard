@@ -86,6 +86,16 @@ The daily GitHub run stores one brief per day, which builds the evaluation sampl
 > "Options are AI-generated from verified facts and always shown with their evidence and trade-off; the
 > executive decides."
 
+### 6c. Evaluation design for the AI parts
+- Study switch "AI text On / Off" on every page (synced): Off hides the summary, page notes and options;
+  everything else is identical, so "dashboard" vs "dashboard + AI" is a clean comparison.
+- Option quality is rated separately from number accuracy: a sample of about 10 options rated 1-5 for
+  usefulness and realism by 2-3 people with finance or aviation background (or the participants), because the
+  number check proves accuracy, not quality.
+- Each page answers ONE question (shown under the company name): 1 Where do we stand today, and what should
+  we consider? 2 How do we compare with the other two airlines? 3 Which market risks move our results, and by
+  how much? 4 What happens to this quarter if fuel or rates move? 5 How did we get here, quarter by quarter?
+
 ## 7. Data freshness and operations  (audit #2, #5)
 - Wording: **daily-refreshed**, not "real-time" (market data daily; financials quarterly; GDP quarterly with a lag).
 - Runs automatically every morning on GitHub Actions; this also keeps the free Supabase database awake.
