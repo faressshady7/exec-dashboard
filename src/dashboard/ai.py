@@ -360,6 +360,8 @@ def store(eng: Engine, s: Settings, r: BriefResult, freeze: bool = False) -> int
                                 VALUES (:b, :n, :m, :h, :t, :p, :u, :wf)"""),
                         {"b": bid, "n": a["attempt"], "m": a["model"], "h": a["headline"], "t": a["brief"],
                          "p": a["passed"], "u": json.dumps(a["unmatched"]), "wf": json.dumps(a.get("flags", []))})
+    from dashboard.bi import create_views
+    create_views(eng)                       # Power BI's brief card now shows this brief (unless one is frozen)
     return bid
 
 

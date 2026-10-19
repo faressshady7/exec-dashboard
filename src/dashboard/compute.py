@@ -405,13 +405,19 @@ def run(s: Settings, eng: Engine) -> dict[str, pd.DataFrame]:
     sens = sensitivities(fin, mkt, s)
     rob, share = robustness(fin, mkt, s, base=sens)
     sens = sens.merge(share, on=["ticker", "factor"], how="left")       # robust_pct travels to the AI as a fact
+    ranges = past_ranges(mkt)
     out = {"kpi_quarterly": kpis, "peer_gap": peer_gaps(kpis, s), "market_snapshot": market_snapshot(mkt),
-           "sensitivity": sens, "scenario": scenario_grid(sens, past_ranges(mkt), historical_moves(mkt, s)),
-           "robustness": rob}
+           "sensitivity": sens, "scenario": scenario_grid(sens, ranges, historical_moves(mkt, s)),
+           "robustness": rob,
+           "past_range": pd.DataFrame([{"code": k, "low": lo, "high": hi} for k, (lo, hi) in ranges.items()],
+                                      columns=["code", "low", "high"])}
+    from dashboard.bi import create_views, drop_views
     with eng.begin() as con:
+        drop_views(con)                    # Power BI views sit on these tables; rebuilt right after
         for name, df in out.items():
             df.assign(computed_at=pd.Timestamp.now(tz="UTC")).to_sql(
                 name, con, schema="gold", if_exists="replace", index=False)
+    create_views(eng)
     return out
 
 
