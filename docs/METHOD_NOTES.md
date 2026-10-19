@@ -85,14 +85,25 @@ possible, report results separately for professionals.
 - **Source:** Financial Modeling Prep (FMP) free plan, end-of-day closes, about 5 years; 3 calls a day.
   Shares outstanding from each 10-K/10-Q cover page (SEC `dei:EntityCommonStockSharesOutstanding`).
 - **Definitions:** index = close / close on the first common day of the 3-year window x 100;
-  market cap = latest close x latest reported shares; EV = market cap + net debt (long-term debt - cash);
+  market cap = latest close x latest reported shares; EV = market cap + net debt;
   P/E on the last 4 quarters' net income (blank when a loss); EV/Revenue on the last 4 quarters;
-  P/B blank when equity is negative.
+  P/B blank when equity is negative. Each row states the quarter its "last 4 quarters" end on
+  (companies report on different dates, so for a few weeks a year they differ).
+- **Net debt (same for every company, also used by the KPI card):** total debt = long-term + current debt,
+  both including finance leases, excluding operating leases; minus liquidity = cash and equivalents +
+  short-term investments. Fixed on 19 Oct 2026: the first version took whichever SEC line each company
+  used, so Delta's excluded leases and current debt and American's counted only bare cash (missing about
+  $6.7B of short-term investments). Real effect: AAL net debt 24.8B -> 21.2B, DAL 5.3B -> 9.1B, UAL 14.1B -> 9.8B.
+- **Cross-check:** American reports total debt of $34.7B at 31 Mar 2026 *including operating leases and
+  pensions* and $10.8B liquidity *including its undrawn credit line*. Our $27.7B debt + about $7B operating
+  leases + pensions, and our $7.3B liquidity + the undrawn line, reconcile with those figures.
+- **Known break:** United changed its debt line in Dec 2023; the new line is about $2-3B higher than the old
+  parts added up (it also counts other financing liabilities). United's net debt before 2024 is therefore
+  slightly understated. This sits at the start of the 3-year window.
 - **Data fix:** one filing had an impossible cover date (AAL Q2 2026 10-Q: 17 Jul 2027, filed Jul 2026);
   a cover date later than the filing date is replaced by the filing date.
 - **Limitations:** raw closes, not dividend-adjusted (Delta pays a small dividend, so its return is
-  slightly understated); net debt excludes leases and current debt, so EV is understated for all three
-  in the same way; FMP free data is for personal use, cited as a data source.
+  slightly understated); FMP free data is for personal use, cited as a data source.
 > "Share prices are daily closes from Financial Modeling Prep; valuation multiples use standard
 > trailing-four-quarter definitions and are left blank where not meaningful (losses, negative equity)."
 

@@ -22,7 +22,8 @@ def fin():
     for t, ni, eq in [("UAL", 1e9, 12e9), ("DAL", 1.5e9, 15e9), ("AAL", -0.1e9, -4e9)]:
         for d in q:
             rows.append({"ticker": t, "period_end": d, "net_income": ni, "revenue": 15e9,
-                         "long_term_debt": 25e9, "cash": 5e9, "equity": eq})
+                         "long_term_debt": 22e9, "debt_current": 3e9, "cash": 4e9,
+                         "short_term_investments": 1e9, "equity": eq})
     return pd.DataFrame(rows)
 
 
@@ -49,6 +50,7 @@ def test_multiples_and_not_meaningful_cases():
     assert ual["enterprise_value"] == pytest.approx(80 * 300e6 + 20e9)
     assert ual["pe"] == pytest.approx(80 * 300e6 / 4e9)
     assert ual["ev_revenue"] == pytest.approx((24e9 + 20e9) / 60e9)
+    assert ual["net_debt"] == pytest.approx(20e9) and str(ual["ttm_end"]) == "2026-06-30"
     assert np.isnan(v.loc["AAL", "pe"]) and np.isnan(v.loc["AAL", "pb"]) and "not meaningful" in v.loc["AAL", "note"]
     assert v.loc["AAL", "return_1y_pct"] < 0
 

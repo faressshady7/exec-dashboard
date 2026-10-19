@@ -96,7 +96,12 @@ financial_metrics:
   capex:               {label: Capital expenditure, kind: duration, tags: [PaymentsToAcquirePropertyPlantAndEquipment, PaymentsToAcquireProductiveAssets, PaymentsForFlightEquipment+PaymentsToAcquireOtherProductiveAssets]}
   cash:                {label: Cash,                kind: instant,  tags: [CashAndCashEquivalentsAtCarryingValue, Cash]}
   total_assets:        {label: Total assets,        kind: instant,  tags: [Assets]}
-  long_term_debt:      {label: Long-term debt,      kind: instant,  tags: [LongTermDebtNoncurrent, LongTermDebtAndCapitalLeaseObligations, LongTermDebt]}
+  # Debt INCLUDES finance leases and EXCLUDES operating leases, the same for every company (checked Oct 2026:
+  # UAL switched tags in 2024, so the first tag is the combined one and older years add the two parts).
+  long_term_debt:      {label: Long-term debt,      kind: instant,  tags: [LongTermDebtAndCapitalLeaseObligations, LongTermDebtNoncurrent+FinanceLeaseLiabilityNoncurrent, LongTermDebtNoncurrent, LongTermDebt]}
+  debt_current:        {label: Current debt,        kind: instant,  tags: [LongTermDebtAndCapitalLeaseObligationsCurrent, LongTermDebtCurrent+FinanceLeaseLiabilityCurrent, LongTermDebtCurrent, DebtCurrent]}
+  # Liquidity = cash and equivalents + short-term investments (AAL holds most of its liquidity as investments)
+  short_term_investments: {label: Short-term investments, kind: instant, tags: [ShortTermInvestments, AvailableForSaleSecuritiesDebtSecuritiesCurrent, MarketableSecuritiesCurrent]}
   equity:              {label: Shareholders' equity, kind: instant, tags: [StockholdersEquity]}
 
 # Risk factors (external variables). `evidence` = the source(s) that justify including it.

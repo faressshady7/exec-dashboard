@@ -24,7 +24,7 @@ from dashboard.config import Settings
 MARKET_IMPACT = {"cost": 1.0, "demand": 0.7, "rates": 0.6, "uncertainty": 0.6, "fx": 0.5, "market": 0.5, "macro": 0.4}
 KPI_IMPACT = {"operating_margin_pct": 1.0, "fuel_share_opex_pct": 0.9, "net_margin_pct": 0.8,
               "free_cash_flow": 0.8, "interest_coverage_x": 0.7, "revenue_yoy_pct": 0.7,
-              "fuel_cost_yoy_pct": 0.7, "debt_to_assets_pct": 0.6, "net_debt": 0.6, "cash": 0.5,
+              "fuel_cost_yoy_pct": 0.7, "debt_to_assets_pct": 0.6, "net_debt": 0.6, "liquidity": 0.5,
               "revenue": 0.4}
 
 

@@ -149,6 +149,7 @@ FINANCIAL_CATEGORY = {
     "operating_income": "income", "interest_expense": "income", "net_income": "income",
     "operating_cash_flow": "cash_flow", "capex": "cash_flow",
     "cash": "balance", "total_assets": "balance", "long_term_debt": "balance", "equity": "balance",
+    "debt_current": "balance", "short_term_investments": "balance",
 }
 
 

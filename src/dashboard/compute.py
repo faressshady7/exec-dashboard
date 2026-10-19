@@ -72,7 +72,7 @@ KPIS = {
     "free_cash_flow":       ("Free cash flow",           "USD",   "higher"),
     "net_debt":             ("Net debt",                 "USD",   "lower"),
     "debt_to_assets_pct":   ("Debt to assets",           "%",     "lower"),
-    "cash":                 ("Cash",                     "USD",   "higher"),
+    "liquidity":            ("Cash and short-term investments", "USD", "higher"),
 }
 
 
@@ -117,6 +117,20 @@ def _safe_div(a, b):
     return np.where((b != 0) & pd.notna(b) & pd.notna(a), a / b, np.nan)
 
 
+def total_debt(df: pd.DataFrame) -> pd.Series:
+    """Long-term + current debt, both including finance leases (operating leases excluded).
+    Current debt missing -> NaN: a partial total would understate debt."""
+    get = lambda c: df[c] if c in df else pd.Series(np.nan, index=df.index)
+    return get("long_term_debt") + get("debt_current")
+
+
+def liquidity(df: pd.DataFrame) -> pd.Series:
+    """Cash and equivalents + short-term investments. No investments line that quarter = none held
+    (e.g. Delta reports none after 2024), so it counts as 0; missing cash stays NaN."""
+    get = lambda c: df[c] if c in df else pd.Series(np.nan, index=df.index)
+    return get("cash") + get("short_term_investments").fillna(0)
+
+
 def compute_kpis(fin: pd.DataFrame, m=None) -> pd.DataFrame:
     df = fin.copy()
     get = lambda c: df[c] if c in df else pd.Series(np.nan, index=df.index)
@@ -126,8 +140,10 @@ def compute_kpis(fin: pd.DataFrame, m=None) -> pd.DataFrame:
     interest = get("interest_expense").where(get("interest_expense") > 0)
     df["interest_coverage_x"] = _safe_div(get("operating_income"), interest)
     df["free_cash_flow"] = get("operating_cash_flow") - get("capex")
-    df["net_debt"] = get("long_term_debt") - get("cash")
-    df["debt_to_assets_pct"] = _safe_div(get("long_term_debt"), get("total_assets")) * 100
+    df["total_debt"] = total_debt(df)
+    df["liquidity"] = liquidity(df)
+    df["net_debt"] = df["total_debt"] - df["liquidity"]
+    df["debt_to_assets_pct"] = _safe_div(df["total_debt"], get("total_assets")) * 100
 
     # YoY: same quarter one year earlier (exact date match on the prior-year quarter end)
     prior = df[["ticker", "period_end", "revenue", "fuel_expense"]].copy()

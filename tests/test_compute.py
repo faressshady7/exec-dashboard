@@ -22,7 +22,8 @@ def fin_frame(ticker="UAL", role="focal", n=12, fuel_px=None):
         "revenue": np.linspace(10e9, 12e9, n), "operating_expenses": 8e9 + fuel, "fuel_expense": fuel,
         "operating_income": np.linspace(10e9, 12e9, n) - (8e9 + fuel), "net_income": 0.5e9,
         "interest_expense": 0.2e9, "operating_cash_flow": 1.5e9, "capex": 1.0e9,
-        "cash": 5e9, "long_term_debt": 20e9, "total_assets": 80e9, "equity": 10e9})
+        "cash": 5e9, "long_term_debt": 18e9, "debt_current": 2e9, "short_term_investments": 1e9,
+        "total_assets": 80e9, "equity": 10e9})
 
 
 def market_frame(px_by_quarter: pd.Series) -> pd.DataFrame:
@@ -40,16 +41,26 @@ def test_kpis_margins_and_yoy():
     rev = np.linspace(10e9, 12e9, 12)
     assert k[(first, "debt_to_assets_pct")] == pytest.approx(25.0)
     assert k[(first, "free_cash_flow")] == pytest.approx(0.5e9)
-    assert k[(first, "net_debt")] == pytest.approx(15e9)
+    assert k[(first, "net_debt")] == pytest.approx(14e9)                 # 18 + 2 debt - (5 cash + 1 investments)
     assert (first, "revenue_yoy_pct") not in k.index                      # no prior year yet
     assert k[(fifth, "revenue_yoy_pct")] == pytest.approx((rev[4] / rev[0] - 1) * 100)
+
+
+def test_net_debt_is_like_for_like():
+    f = fin_frame(n=4)
+    f.loc[1, "short_term_investments"] = np.nan                            # none held that quarter -> 0
+    f.loc[2, "debt_current"] = np.nan                                      # missing debt part -> unknown, not smaller
+    k = compute_kpis(f)
+    nd = k[k.kpi == "net_debt"].set_index("period_end")["value"]
+    q = quarters(4)
+    assert nd[q[1]] == pytest.approx(15e9) and q[2] not in nd.index
 
 
 def test_unusual_flag_catches_a_jump():
     f = fin_frame(n=12)
     f.loc[10, "cash"] = 50e9                                               # sudden jump
     k = compute_kpis(f)
-    cash = k[k.kpi == "cash"].set_index("period_end")
+    cash = k[k.kpi == "liquidity"].set_index("period_end")
     assert cash.loc[quarters(12)[10], "unusual"] and not cash.loc[quarters(12)[5], "unusual"]
 
 
@@ -86,7 +97,7 @@ def test_fuel_sensitivity_recovers_gallons_and_what_if():
 def test_peer_gap_ranks_by_direction():
     s = load_settings()
     fin = pd.concat([fin_frame("UAL", "focal"), fin_frame("DAL", "peer"), fin_frame("AAL", "peer")])
-    fin.loc[fin.ticker == "DAL", "long_term_debt"] = 10e9                  # DAL least indebted
+    fin.loc[fin.ticker == "DAL", "long_term_debt"] = 8e9                   # DAL least indebted
     k = compute_kpis(fin.reset_index(drop=True))
     pg = peer_gaps(k, s)
     d2a = pg[pg.kpi == "debt_to_assets_pct"].set_index("ticker")

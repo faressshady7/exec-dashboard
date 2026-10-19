@@ -6,11 +6,14 @@ and the quarterly financials already used for the KPIs.
 Definitions (standard, stated so an examiner can recompute them):
   index_100     close / close on the first common trading day of the window x 100 (window = stocks.index_years)
   market_cap    latest close x latest shares outstanding reported on or before that day
-  net_debt      long-term debt - cash, latest balance sheet (same as the KPI; excludes leases and current debt)
+  net_debt      total debt (long-term + current, incl. finance leases; operating leases excluded)
+                - (cash + short-term investments), latest balance sheet - same definition as the KPI card
   EV            market_cap + net_debt
   P/E           market_cap / net income of the last 4 quarters   (blank when that income is a loss)
   EV/Revenue    EV / revenue of the last 4 quarters
   P/B           market_cap / shareholders' equity                 (blank when equity is negative)
+The last 4 quarters can end on different dates (one company has already reported, another not yet):
+`ttm_end` and `balance_date` say which quarter each row uses, and the dashboard shows them.
 Limitation: raw closes, not dividend-adjusted (Delta pays a small dividend; UAL and AAL do not).
 
 Run alone:  python -m dashboard.valuation
@@ -25,8 +28,9 @@ from sqlalchemy.engine import Engine
 from dashboard.config import Settings, load_settings
 
 INDEX_COLS = ["ticker", "trade_date", "close", "index_100"]
-VALUATION_COLS = ["ticker", "price_date", "price", "shares", "shares_as_of", "market_cap", "net_debt",
-                  "enterprise_value", "ttm_net_income", "ttm_revenue", "ttm_quarters", "equity",
+VALUATION_COLS = ["ticker", "price_date", "price", "shares", "shares_as_of", "market_cap", "total_debt", "liquidity",
+                  "net_debt", "balance_date", "enterprise_value", "ttm_net_income", "ttm_revenue", "ttm_quarters",
+                  "ttm_end", "equity",
                   "pe", "ev_revenue", "pb", "return_1m_pct", "return_1y_pct", "return_index_pct", "note"]
 
 
@@ -68,12 +72,26 @@ def _ret(series: pd.Series, end: pd.Timestamp, offset: pd.DateOffset) -> float:
     return (series.iloc[-1] / past.iloc[-1] - 1) * 100
 
 
-def _ttm(f: pd.DataFrame, col: str) -> tuple[float, int]:
-    """Sum of the last 4 quarters that have a value, only if they are 4 consecutive quarters."""
+def _ttm(f: pd.DataFrame, col: str) -> tuple[float, int, object]:
+    """Sum of the last 4 quarters that have a value, only if they are 4 consecutive quarters.
+    Returns (sum, quarters found, end date of the last quarter)."""
     q = f.dropna(subset=[col]).sort_values("period_end").tail(4)
+    end = q["period_end"].iloc[-1].date() if len(q) else None
     if len(q) < 4 or (q["period_end"].iloc[-1] - q["period_end"].iloc[0]).days > 300:
-        return np.nan, len(q)
-    return float(q[col].sum()), 4
+        return np.nan, len(q), end
+    return float(q[col].sum()), 4, end
+
+
+def _balance(f: pd.DataFrame) -> tuple[float, float, object]:
+    """(total debt, liquidity, date) from the latest quarter where both are known."""
+    from dashboard.compute import liquidity, total_debt
+    if f.empty:
+        return np.nan, np.nan, None
+    b = f.assign(_debt=total_debt(f), _liq=liquidity(f)).dropna(subset=["_debt", "_liq"]).sort_values("period_end")
+    if b.empty:
+        return np.nan, np.nan, None
+    r = b.iloc[-1]
+    return float(r["_debt"]), float(r["_liq"]), r["period_end"].date()
 
 
 def _latest(f: pd.DataFrame, col: str) -> float:
@@ -94,9 +112,10 @@ def valuation(prices: pd.DataFrame, shares: pd.DataFrame, fin: pd.DataFrame, s: 
         n_shares = float(sh["shares"].iloc[-1]) if len(sh) else np.nan
         f = fin[fin["ticker"] == c.ticker] if "ticker" in fin else fin.iloc[0:0]
         get = lambda col: _latest(f, col) if col in f else np.nan
-        net_debt = get("long_term_debt") - get("cash")
-        ni, nq = _ttm(f, "net_income") if "net_income" in f else (np.nan, 0)
-        rev, _ = _ttm(f, "revenue") if "revenue" in f else (np.nan, 0)
+        debt, liq, bal_date = _balance(f)
+        net_debt = debt - liq
+        ni, nq, ttm_end = _ttm(f, "net_income") if "net_income" in f else (np.nan, 0, None)
+        rev, _, _ = _ttm(f, "revenue") if "revenue" in f else (np.nan, 0, None)
         equity = get("equity")
         mcap = price * n_shares
         ev = mcap + net_debt
@@ -108,8 +127,9 @@ def valuation(prices: pd.DataFrame, shares: pd.DataFrame, fin: pd.DataFrame, s: 
         rows.append({
             "ticker": c.ticker, "price_date": day.date(), "price": price,
             "shares": n_shares, "shares_as_of": sh["as_of"].iloc[-1].date() if len(sh) else None,
-            "market_cap": mcap, "net_debt": net_debt, "enterprise_value": ev,
-            "ttm_net_income": ni, "ttm_revenue": rev, "ttm_quarters": nq, "equity": equity,
+            "market_cap": mcap, "total_debt": debt, "liquidity": liq, "net_debt": net_debt,
+            "balance_date": bal_date, "enterprise_value": ev,
+            "ttm_net_income": ni, "ttm_revenue": rev, "ttm_quarters": nq, "ttm_end": ttm_end, "equity": equity,
             "pe": mcap / ni if ni > 0 else np.nan,
             "ev_revenue": ev / rev if rev > 0 else np.nan,
             "pb": mcap / equity if equity > 0 else np.nan,
@@ -131,11 +151,14 @@ def main() -> None:
         raise SystemExit("No share prices in gold yet: set FMP_API_KEY, then run bronze, silver and gold.")
     v = valuation(prices, shares, load_financials(eng), s)
     print(f"VALUATION ({v['price_date'].max()})")
-    print(f"  {'TICKER':<7}{'PRICE':>9}{'MKT CAP':>10}{'EV':>10}{'P/E':>7}{'EV/REV':>8}{'P/B':>6}{'1Y':>8}")
+    print(f"  {'TICKER':<7}{'PRICE':>9}{'MKT CAP':>10}{'DEBT':>9}{'LIQUID':>9}{'NET DEBT':>10}{'EV':>9}"
+          f"{'P/E':>7}{'EV/REV':>8}{'P/B':>6}{'1Y':>8}  LAST 4Q TO")
     for r in v.itertuples():
         f = lambda x, d=1: "-" if pd.isna(x) else f"{x:.{d}f}"
-        print(f"  {r.ticker:<7}{r.price:>9.2f}{r.market_cap / 1e9:>9.1f}B{r.enterprise_value / 1e9:>9.1f}B"
-              f"{f(r.pe):>7}{f(r.ev_revenue, 2):>8}{f(r.pb):>6}{f(r.return_1y_pct):>7}%")
+        b = lambda x: "-" if pd.isna(x) else f"{x / 1e9:.1f}B"
+        print(f"  {r.ticker:<7}{r.price:>9.2f}{b(r.market_cap):>10}{b(r.total_debt):>9}{b(r.liquidity):>9}"
+              f"{b(r.net_debt):>10}{b(r.enterprise_value):>9}{f(r.pe):>7}{f(r.ev_revenue, 2):>8}{f(r.pb):>6}"
+              f"{f(r.return_1y_pct):>7}%  {r.ttm_end}")
 
 
 if __name__ == "__main__":
