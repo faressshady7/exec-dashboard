@@ -1,13 +1,8 @@
-# Daily pipeline: refreshes the data AND keeps the free Supabase project awake
-# (Supabase pauses free projects after 7 days without database activity).
-# Runs every day at ~06:15 Cairo time; can also be started by hand (Actions tab -> Run workflow).
-# Secrets needed (repo Settings -> Secrets and variables -> Actions): DATABASE_URL, GEMINI_API_KEY.
 name: daily-pipeline
 
 on:
   schedule:
-    - cron: "17 3 * * *"        # 03:17 UTC = 06:17 Cairo (summer) / 05:17 (winter); off the busy :00 slot
-  workflow_dispatch: {}
+    - cron: "17 3 * * *"       
 
 concurrency:
   group: daily-pipeline
@@ -51,8 +46,4 @@ jobs:
         run: python -m dashboard.compute
       - name: 5 AI brief (stored, never frozen automatically)
         run: python -m dashboard.ai
-
-      # Runs even if a step above failed, so the database still gets activity that day.
-      - name: Keep Supabase awake
-        if: always()
-        run: python -c "from dashboard.db import engine; from sqlalchemy import text; c=engine().connect(); print('db ok:', c.execute(text('select now()')).scalar()); c.close()"
+        
