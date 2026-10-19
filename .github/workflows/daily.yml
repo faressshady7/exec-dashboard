@@ -1,0 +1,58 @@
+# Daily pipeline: refreshes the data AND keeps the free Supabase project awake
+# (Supabase pauses free projects after 7 days without database activity).
+# Runs every day at ~06:15 Cairo time; can also be started by hand (Actions tab -> Run workflow).
+# Secrets needed (repo Settings -> Secrets and variables -> Actions): DATABASE_URL, GEMINI_API_KEY.
+name: daily-pipeline
+
+on:
+  schedule:
+    - cron: "17 3 * * *"        # 03:17 UTC = 06:17 Cairo (summer) / 05:17 (winter); off the busy :00 slot
+  workflow_dispatch: {}
+
+concurrency:
+  group: daily-pipeline
+  cancel-in-progress: false
+
+jobs:
+  pipeline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      PYTHONPATH: src
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Check secrets are set
+        run: |
+          if [ -z "$DATABASE_URL" ]; then echo "::error::DATABASE_URL secret is missing"; exit 1; fi
+          if [ -z "$GEMINI_API_KEY" ]; then echo "::warning::GEMINI_API_KEY missing - the AI step will fail"; fi
+
+      - name: Install libraries
+        run: pip install -q -r requirements.txt
+
+      - name: Tests (no database - never touches Supabase)
+        run: python -m pytest -q
+
+      - name: 1 Bronze (download)
+        run: python -m dashboard.bronze
+      - name: 2 Silver (clean + load)
+        run: python -m dashboard.silver
+      - name: 3 Gold (star schema)
+        run: python -m dashboard.gold
+      - name: 4 Compute (KPIs, sensitivities)
+        run: python -m dashboard.compute
+      - name: 5 AI brief (stored, never frozen automatically)
+        run: python -m dashboard.ai
+
+      # Runs even if a step above failed, so the database still gets activity that day.
+      - name: Keep Supabase awake
+        if: always()
+        run: python -c "from dashboard.db import engine; from sqlalchemy import text; c=engine().connect(); print('db ok:', c.execute(text('select now()')).scalar()); c.close()"

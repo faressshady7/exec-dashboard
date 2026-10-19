@@ -1,0 +1,276 @@
+# ============================================================
+# Layer 0 - Configuration
+# The ONLY place companies, peers and risk factors are named.
+# Change this file to run the whole system for another company.
+# ============================================================
+
+project:
+  name: Executive Risk Dashboard
+  start_date: 2015-01-01   # STORAGE start: history used only as a baseline ("is today unusual?")
+  end_date: null           # null = up to today
+  display_years: 3         # what the executive sees by default: a ROLLING window ending today
+  # Freshness rules: Step 2 flags a source whose LATEST value is older than this.
+  # FRED dates a monthly value at the 1st of the month and publishes it weeks later.
+  max_age_days:
+    daily: 14              # fuel, oil, VIX, FX, yields (the dollar index updates weekly)
+    monthly: 100           # CPI, fed funds, consumer sentiment
+    quarterly: 220         # GDP
+    filings: 120           # latest 10-Q / 10-K (companies file every quarter)
+    news: 3                # newest article about the company
+  currency: USD
+  # SEC requires a User-Agent with a contact email on every request
+  sec_user_agent: "Fares (GIU thesis) faresshady7@gmail.com"
+  # Overridden by the environment variable DATABASE_URL if it is set
+  database_url: "postgresql+psycopg://postgres@localhost:5432/thesis"
+  data_dir: data            # raw downloads (bronze files) go here
+
+# Who the dashboard is about, and who it is compared with
+focal_company: UAL
+peers: [DAL, AAL]
+
+companies:
+  - ticker: UAL
+    name: United Airlines Holdings, Inc.
+    news_terms: ["United Airlines"]   # exact phrases searched in the news
+    cik: 100517            # verified on SEC company_tickers.json
+    industry: airlines
+  - ticker: DAL
+    name: Delta Air Lines, Inc.
+    news_terms: ["Delta Air Lines"]   # exact phrases searched in the news
+    cik: 27904             # verified on SEC company_tickers.json
+    industry: airlines
+    # Shown next to this company's fuel figures (dashboard + AI). Kept number-free so the AI number check still works.
+    # Verified Oct 2026: Delta's Monroe Energy refinery (Trainer, PA) supplies most of its jet fuel.
+    caveats: ["Delta owns an oil refinery that supplies most of its jet fuel, so its fuel figures are not like-for-like with peers"]
+  - ticker: AAL
+    name: American Airlines Group Inc.
+    news_terms: ["American Airlines"]   # exact phrases searched in the news
+    cik: 6201              # verified on SEC submissions API
+    industry: airlines
+
+# News (GDELT: free, no API key, last 3 months searchable, updated every 15 min)
+news:
+  lookback_days: 30
+  max_articles: 250        # per query (GDELT max). Only ~7% of raw hits are really about the company.
+  language: english
+  industry_terms: ["jet fuel", "airline industry", "airfares"]
+
+# News filter (silver). Raw articles are all kept in bronze; silver TAGS each one.
+# Criteria for the tiers (judgement, documented): established editorial standards and a
+# corrections policy (tier 1), specialist trade/business press (tier 2), everything else (tier 3).
+news_filter:
+  # the headline itself must contain one of these (case-insensitive); tickers match whole words
+  headline_terms:
+    UAL: ["United Airlines", "United Air Lines", "UAL"]
+    DAL: ["Delta Air Lines", "Delta Airlines", "Delta Air", "DAL"]
+    AAL: ["American Airlines", "AAL"]
+    INDUSTRY: ["jet fuel", "airline", "airlines", "airfare", "airfares", "aviation", "air travel"]
+  tier1: [reuters.com, apnews.com, bloomberg.com, wsj.com, ft.com, cnbc.com, marketwatch.com, barrons.com,
+          nytimes.com, washingtonpost.com, bbc.com, bbc.co.uk, economist.com, cnn.com, npr.org, latimes.com,
+          usatoday.com, axios.com, theguardian.com, fortune.com, chicagotribune.com, abcnews.go.com, cbsnews.com, nbcnews.com]
+  tier2: [flightglobal.com, aviationweek.com, ainonline.com, skift.com, airlineweekly.com, simpleflying.com,
+          aerotime.aero, aviationpros.com, travelweekly.com, businesstravelnews.com, futuretravelexperience.com,
+          businessinsider.com, forbes.com, thenationalnews.com, economictimes.indiatimes.com, business-standard.com,
+          aol.com, finance.yahoo.com, investopedia.com]
+  # automated stock-spam sites, content farms and state-run media: never shown
+  blocklist: [dailypolitical.com, tickerreport.com, themarketsdaily.com, thelincolnianonline.com, etfdailynews.com,
+              zolmax.com, thecerbatgem.com, modernreaders.com, wkrb13.com, com-unik.info, americanbankingnews.com,
+              theenterpriseleader.com, newsroomamerica.com, rustourismnews.com, presstv.ir, presstv.co.uk, sana.sy,
+              rt.com, tass.com, sputnikglobe.com]
+  ai_max_tier: 2           # the AI only sees tiers 1-2; the dashboard shows tiers 1-3 with a label
+
+# Company financials from SEC XBRL (10-K / 10-Q). For each metric the tags are tried
+# in order; companies switch tags over time. Silver reports which tag matched.
+# kind: duration = flow over a period (income, cash flow); instant = balance on a date.
+# A '-' before a tag flips its sign (e.g. net interest tags are negative when it is an expense).
+# 'A+B' sums two tags for the same period (e.g. Delta capex = flight equipment + other assets).
+# Fallback tags are only used for periods the earlier tags do not cover; the tag used is stored per row.
+financial_metrics:
+  revenue:             {label: Revenue,             kind: duration, tags: [Revenues, RevenueFromContractWithCustomerExcludingAssessedTax, SalesRevenueNet, SalesRevenueServicesNet]}
+  operating_expenses:  {label: Operating expenses,  kind: duration, tags: [OperatingExpenses, CostsAndExpenses]}
+  fuel_expense:        {label: Aircraft fuel,       kind: duration, tags: [AircraftFuelAndRelatedTaxes, FuelCosts]}
+  operating_income:    {label: Operating income,    kind: duration, tags: [OperatingIncomeLoss]}
+  interest_expense:    {label: Interest expense,    kind: duration, tags: [InterestExpenseNonoperating, InterestExpense, InterestExpenseDebt, InterestCostsIncurred, -InterestIncomeExpenseNonoperatingNet, -InterestIncomeExpenseNet]}
+  net_income:          {label: Net income,          kind: duration, tags: [NetIncomeLoss]}
+  operating_cash_flow: {label: Operating cash flow, kind: duration, tags: [NetCashProvidedByUsedInOperatingActivities, NetCashProvidedByUsedInOperatingActivitiesContinuingOperations]}
+  capex:               {label: Capital expenditure, kind: duration, tags: [PaymentsToAcquirePropertyPlantAndEquipment, PaymentsToAcquireProductiveAssets, PaymentsForFlightEquipment+PaymentsToAcquireOtherProductiveAssets]}
+  cash:                {label: Cash,                kind: instant,  tags: [CashAndCashEquivalentsAtCarryingValue, Cash]}
+  total_assets:        {label: Total assets,        kind: instant,  tags: [Assets]}
+  long_term_debt:      {label: Long-term debt,      kind: instant,  tags: [LongTermDebtNoncurrent, LongTermDebtAndCapitalLeaseObligations, LongTermDebt]}
+  equity:              {label: Shareholders' equity, kind: instant, tags: [StockholdersEquity]}
+
+# Risk factors (external variables). `evidence` = the source(s) that justify including it.
+# RULE: evidence = peer-reviewed journal articles published 2021-2026 only (checked online 19 Oct 2026).
+# Kept to the minimum set that covers every variable:
+#   [H22] Horobet, Zlatea, Belascu & Dumitrescu (2022) Oil price volatility and airlines' stock returns. J. Business Economics
+#         and Management 23(2) 284-304, doi 10.3846/jbem.2022.16094 -> oil, market volatility, USD, inflation, maturity risk
+#   [BM24] Blampied & Mahadeo (2024) Airline industry equities under external uncertainty shocks. Economics Letters 244, 111994,
+#         doi 10.1016/j.econlet.2024.111994 -> investor fear (VIX), geopolitical and fuel-cost uncertainty
+#   [C23] Chi (2023) Explaining US travel behavior with perceived threat of pandemic, consumer sentiment, and economic policy
+#         uncertainty. Transport Policy 137 90-99, doi 10.1016/j.tranpol.2023.04.019
+#   [H22b] Hanson, Toru Delibasi, Gatti & Cohen (2022) How do changes in economic activity affect air passenger traffic?
+#         J. Air Transport Management 98, doi 10.1016/j.jairtraman.2021.102147 -> income (GDP) elasticity
+# DATA-SOURCE citations (who built an index; NOT evidence of an effect, so the age rule does not apply):
+#   Baker, Bloom & Davis (2016) QJE 131(4) 1593-1636 -> USEPUINDXD and the EMV trackers on FRED
+#   Caldara & Iacoviello (2022) AER 112(4) 1194-1225, doi 10.1257/aer.20191823 -> geopolitical risk index (planned)
+risk_factors:
+  # --- Cost side -------------------------------------------------
+  - id: jet_fuel
+    scope: industry
+    label: Jet fuel price (US Gulf Coast)
+    category: cost
+    source: fred
+    series: DJFUELUSGULF   # verified: USD/gallon, daily
+    frequency: daily
+    unit: USD per gallon
+    evidence: "H22 (oil price risk lowers airline returns); fuel is the largest airline cost (10-K)"
+  - id: brent
+    scope: industry
+    label: Brent crude oil
+    category: cost
+    source: fred
+    series: DCOILBRENTEU   # verified: USD/barrel, daily
+    frequency: daily
+    unit: USD per barrel
+    evidence: "H22 (oil price risk)"
+  - id: oil_volatility
+    scope: industry
+    label: Oil volatility (OVX)
+    category: market
+    source: fred
+    series: OVXCLS         # verified: index, daily, from 2007-05
+    frequency: daily
+    unit: index
+    evidence: "H22 (oil price volatility); BM24 (fuel-cost uncertainty)"
+  - id: market_volatility
+    scope: general
+    label: Market volatility (VIX)
+    category: market
+    source: fred
+    series: VIXCLS
+    frequency: daily
+    unit: index
+    evidence: "H22 (financial market volatility); BM24 (investor-fear shocks: long-lasting negative effect)"
+  - id: usd_index
+    scope: general
+    label: US dollar index (broad)
+    category: fx
+    source: fred
+    series: DTWEXBGS       # verified: index Jan 2006=100, daily
+    frequency: daily
+    unit: index
+    evidence: "H22 (US dollar currency risk)"
+  - id: usd_eur
+    scope: general
+    label: US dollars per euro
+    category: fx
+    source: fred
+    series: DEXUSEU
+    frequency: daily
+    unit: USD per EUR
+    evidence: "H22 (US dollar currency risk)"
+  - id: yield_10y
+    scope: general
+    label: 10-year Treasury yield
+    category: rates
+    source: fred
+    series: DGS10
+    frequency: daily
+    unit: percent
+    evidence: "H22 (maturity risk)"
+  - id: yield_1y
+    scope: general
+    label: 1-year Treasury yield
+    category: rates
+    source: fred
+    series: DGS1           # verified: percent, daily
+    frequency: daily
+    unit: percent
+    evidence: "H22 (maturity risk)"
+  - id: fed_funds
+    scope: general
+    label: Federal funds rate
+    category: rates
+    source: fred
+    series: FEDFUNDS
+    frequency: monthly
+    unit: percent
+    evidence: "WEAK: H22 (maturity risk, indirect); cost of floating-rate debt (10-K Item 7A)"
+  - id: inflation
+    scope: general
+    label: Consumer prices (CPI)
+    category: macro
+    source: fred
+    series: CPIAUCSL
+    frequency: monthly
+    unit: index
+    evidence: "H22 (inflation risk factor)"
+
+  # --- Uncertainty shocks (general: affect every company) ------------
+  - id: policy_uncertainty
+    scope: general
+    label: Economic policy uncertainty
+    category: uncertainty
+    source: fred
+    series: USEPUINDXD     # Baker, Bloom & Davis (2016), built from newspaper coverage; verified on first download
+    frequency: daily
+    unit: index
+    evidence: "C23 (EPU: little short-run effect on US air travel)"
+  - id: disease_risk
+    scope: general
+    label: Infectious-disease market risk
+    category: uncertainty
+    source: fred
+    series: INFECTDISEMVTRACKD   # disease-related equity-market-volatility tracker (Baker, Bloom, Davis, Kost et al.)
+    frequency: monthly
+    unit: index
+    evidence: "C23 (pandemic threat lowers long-run US air travel demand)"
+
+  # --- Demand side ---------------------------------------------------
+  - id: consumer_sentiment
+    scope: general
+    label: Consumer sentiment
+    category: demand
+    source: fred
+    series: UMCSENT        # verified: index, monthly
+    frequency: monthly
+    unit: index
+    evidence: "C23 (consumer sentiment raises long-run US air travel demand)"
+  - id: real_gdp
+    scope: general
+    label: Real GDP
+    category: demand
+    source: fred
+    series: GDPC1
+    frequency: quarterly
+    unit: billions of chained USD
+    evidence: "H22b (income elasticity of US air traffic)"
+
+# Derived factors are computed from other factors (Layer 2), not downloaded
+derived_factors:
+  - id: term_spread
+    scope: general
+    label: Interest-rate risk (10y minus 1y)
+    formula: yield_10y - yield_1y
+    unit: percentage points
+    evidence: "H22 (maturity risk)"
+
+# AI layer (Step 6-7). The LLM never calculates: it picks and explains numbers computed in Step 5.
+ai:
+  provider: gemini                 # gemini | ollama
+  model: gemini-3.8-flash          # free tier
+  fallback_model: gemini-3.5-flash-lite   # used if the main model is rate-limited
+  ollama_model: llama3.1:8b        # only if provider: ollama (local, offline)
+  temperature: 0.2                 # low = consistent wording between runs
+  max_output_tokens: 4096         # includes the model's 'thinking' tokens
+  thinking_level: low              # low | medium | high (more = slower, not needed for 3 sentences)
+  candidates: 12                   # insights shown to the LLM in round 1
+  pick: 3                          # insights in the final brief
+  weights: {significance: 0.5, relevance: 0.3, impact: 0.2}   # LEVA scoring
+  max_retries: 1                   # rewrite once if the number checker fails, then use template
+  # Wording check (flags only, never blocks): numbers can be right while the claim is not.
+  # A flagged brief counts as a POSSIBLE claim error; the study reports numeric and claim errors separately.
+  flag_terms:
+    exaggeration: [historic, record, unprecedented, crisis, collapse, soaring, plunge, plunging, skyrocketing, massive]
+    cause: [because, due to, driven by, caused by, as a result of, thanks to, led to]
+

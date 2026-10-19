@@ -1,0 +1,171 @@
+"""Step 2 tests. No internet needed: a fake session returns canned responses."""
+import json
+from datetime import date
+
+import pytest
+
+from dashboard.bronze import (Fetcher, gdelt_query, parse_fred_csv, parse_gdelt,
+                              parse_sec_latest_filing, run)
+from dashboard.config import load_settings
+
+TODAY = date(2026, 10, 19)
+
+
+class FakeResponse:
+    def __init__(self, status, content=b""):
+        self.status_code, self.content = status, content
+
+
+class FakeSession:
+    """Answers by URL. `script` can hold a list of responses to simulate retries."""
+
+    def __init__(self, routes):
+        self.routes, self.calls = routes, []
+
+    def get(self, url, headers=None, timeout=None):
+        self.calls.append((url, headers))
+        for key, resp in self.routes.items():
+            if key in url:
+                if isinstance(resp, list):
+                    return resp.pop(0) if len(resp) > 1 else resp[0]
+                return resp
+        return FakeResponse(404)
+
+
+def fred_csv(series, last="2026-10-16", monthly=False):
+    rows = ["observation_date," + series, "2015-01-01,1.0", "2015-01-02,."]
+    rows.append(f"{last},2.5")
+    return ("\n".join(rows) + "\n").encode()
+
+
+def submissions(form="10-Q", filed="2026-07-17", period="2026-06-30"):
+    return json.dumps({"filings": {"recent": {
+        "form": ["8-K", form, "10-K"], "filingDate": ["2026-10-01", filed, "2026-02-20"],
+        "reportDate": ["2026-10-01", period, "2025-12-31"]}}}).encode()
+
+
+def gdelt(seen="20261018T121500Z", n=3):
+    return json.dumps({"articles": [{"url": f"https://news.example/{i}", "title": f"Story {i}",
+                                     "seendate": seen, "domain": "news.example", "language": "English"}
+                                    for i in range(n)]}).encode()
+
+
+FACTS = json.dumps({"entityName": "Test Air", "facts": {"us-gaap": {"Revenues": {}, "Assets": {}}}}).encode()
+
+
+@pytest.fixture
+def settings():
+    return load_settings()
+
+
+def all_routes(settings, **overrides):
+    latest = {"monthly": "2026-08-01", "quarterly": "2026-04-01", "daily": "2026-10-16"}
+    routes = {f"id={f.series}&": FakeResponse(200, fred_csv(f.series, latest[f.frequency]))
+              for f in settings.risk_factors}
+    routes["companyfacts"] = FakeResponse(200, FACTS)
+    routes["submissions"] = FakeResponse(200, submissions())
+    routes["gdeltproject"] = FakeResponse(200, gdelt())
+    routes.update(overrides)
+    return routes
+
+
+def fast_fetcher(session):
+    return Fetcher("Fares test@example.com", session=session, backoff=0, min_interval=0)
+
+
+# ---------------------------------------------------------------- parsers
+def test_fred_parser_skips_missing_dot_values():
+    rows, latest = parse_fred_csv(fred_csv("VIXCLS"), "VIXCLS")
+    assert rows == 2 and latest == "2026-10-16"
+
+
+def test_fred_parser_rejects_wrong_series():
+    with pytest.raises(ValueError, match="unexpected FRED header"):
+        parse_fred_csv(fred_csv("VIXCLS"), "DGS10")
+
+
+def test_latest_filing_ignores_8k():
+    filed, detail = parse_sec_latest_filing(submissions())
+    assert filed == "2026-07-17" and detail.startswith("10-Q")
+
+
+# ---------------------------------------------------------------- full run
+def test_run_saves_raw_files_manifest_and_freshness(settings, tmp_path):
+    session = FakeSession(all_routes(settings))
+    results, report = run(settings, fast_fetcher(session), tmp_path, today=TODAY)
+
+    n_expected = len(settings.risk_factors) + 3 * len(settings.in_scope) + 1   # +1 industry news
+    assert len(results) == n_expected and all(r.status == "OK" for r in results)
+    # raw file is byte-for-byte what the server sent
+    assert (tmp_path / "fred/VIXCLS/2026-10-19.csv").read_bytes() == fred_csv("VIXCLS")
+    assert (tmp_path / "sec/companyfacts/UAL_0000100517/2026-10-19.json").exists()
+    assert len((tmp_path / "_manifest.jsonl").read_text().splitlines()) == n_expected
+    assert all(x["status"] == "OK" for x in report)       # monthly/quarterly lags are allowed
+
+
+def test_sec_requests_carry_user_agent(settings, tmp_path):
+    session = FakeSession(all_routes(settings))
+    run(settings, fast_fetcher(session), tmp_path, today=TODAY)
+    sec_calls = [h for url, h in session.calls if "sec.gov" in url]
+    assert sec_calls and all("@" in h["User-Agent"] for h in sec_calls)
+
+
+def test_one_failure_does_not_stop_the_rest(settings, tmp_path):
+    session = FakeSession(all_routes(settings, **{"id=VIXCLS&": FakeResponse(404)}))
+    results, report = run(settings, fast_fetcher(session), tmp_path, today=TODAY)
+    status = {r.key: r.status for r in results if r.source == "fred"}
+    assert status["VIXCLS"] == "FAILED" and status["DGS10"] == "OK"
+    assert not (tmp_path / "fred/VIXCLS").exists()          # nothing half-saved
+    assert {"key": "VIXCLS", "status": "FAILED"}.items() <= next(x for x in report if x["key"] == "VIXCLS").items()
+
+
+def test_stale_data_is_flagged(settings, tmp_path):
+    old = FakeResponse(200, fred_csv("DJFUELUSGULF", last="2026-09-01"))
+    session = FakeSession(all_routes(settings, **{"id=DJFUELUSGULF&": old}))
+    _, report = run(settings, fast_fetcher(session), tmp_path, today=TODAY)
+    fuel = next(x for x in report if x["key"] == "DJFUELUSGULF")
+    assert fuel["status"] == "STALE" and fuel["age_days"] == 48
+
+
+def test_retries_after_rate_limit(settings, tmp_path):
+    flaky = [FakeResponse(429), FakeResponse(200, fred_csv("VIXCLS"))]
+    session = FakeSession(all_routes(settings, **{"id=VIXCLS&": flaky}))
+    results, _ = run(settings, fast_fetcher(session), tmp_path, today=TODAY)
+    assert next(r for r in results if r.key == "VIXCLS").status == "OK"
+
+
+def test_second_run_same_day_skips_downloads(settings, tmp_path):
+    run(settings, fast_fetcher(FakeSession(all_routes(settings))), tmp_path, today=TODAY)
+    session2 = FakeSession(all_routes(settings))
+    results, _ = run(settings, fast_fetcher(session2), tmp_path, today=TODAY)
+    assert session2.calls == [] and all(r.status == "SKIPPED" for r in results)
+
+
+# ---------------------------------------------------------------- news
+def test_gdelt_query_builds_exact_phrases():
+    assert gdelt_query(["United Airlines"], "english") == '"United Airlines" sourcelang:english'
+    assert gdelt_query(["jet fuel", "airfares"], "english") == '("jet fuel" OR "airfares") sourcelang:english'
+
+
+def test_gdelt_parser_reads_newest_date_and_handles_empty():
+    assert parse_gdelt(gdelt()) == (3, "2026-10-18")
+    assert parse_gdelt(b"") == (0, None)
+
+
+def test_news_saved_per_company_and_industry(settings, tmp_path):
+    run(settings, fast_fetcher(FakeSession(all_routes(settings))), tmp_path, today=TODAY)
+    saved = sorted(p.parent.name for p in (tmp_path / "news/gdelt").glob("*/2026-10-19.json"))
+    assert saved == sorted([c.ticker for c in settings.in_scope] + ["INDUSTRY"])
+
+
+def test_gdelt_rate_limit_text_is_retried(settings, tmp_path):
+    limited = [FakeResponse(200, b"Please limit requests to one every 5 seconds"), FakeResponse(200, gdelt())]
+    session = FakeSession(all_routes(settings, gdeltproject=limited))
+    results, _ = run(settings, fast_fetcher(session), tmp_path, today=TODAY)
+    assert next(r for r in results if r.source == "news").status == "OK"
+
+
+def test_old_news_is_flagged_stale(settings, tmp_path):
+    session = FakeSession(all_routes(settings, gdeltproject=FakeResponse(200, gdelt("20261001T000000Z"))))
+    _, report = run(settings, fast_fetcher(session), tmp_path, today=TODAY)
+    assert all(x["status"] == "STALE" for x in report if x["source"] == "news")
