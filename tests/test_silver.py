@@ -170,12 +170,11 @@ def test_full_load_is_idempotent(tmp_path):
         n_news = con.execute(text("select count(*) from silver.news_article")).scalar()
     assert first["fred_observation"] == 2 and (n_fred, n_q, n_news) == (2, 4, 1)
     assert second["sec_fact"] == first["sec_fact"]
-    with eng.connect() as con:                                  # audit tables rebuilt, not doubled
-        n_rej = con.execute(text("select count(*) from silver.sec_rejected")).scalar()
-        reasons = {r[0] for r in con.execute(text("select reason from silver.sec_rejected")).all()}
-        n_sum = con.execute(text("select count(*) from silver.drop_summary")).scalar()
-    assert n_rej == 2 and reasons == {"ytd_total_used_to_derive_quarter"} and n_sum >= 2
-    assert second["sec_rejected"] == first["sec_rejected"] == 2
+    with eng.connect() as con:                                  # only counts are stored, rebuilt not doubled
+        rows = con.execute(text("select reason, n from silver.drop_summary where source = 'sec'")).all()
+        has_rejected = con.execute(text("select to_regclass('silver.sec_rejected')")).scalar()
+    assert dict(rows) == {"ytd_total_used_to_derive_quarter": 2} and has_rejected is None
+    assert second["dropped"] == first["dropped"]
 
 
 def test_minus_tag_flips_sign_and_is_only_a_fallback():
@@ -316,10 +315,22 @@ def test_missing_quarters_and_fred_gaps():
     from dashboard.silver import fred_missing, missing_quarters
     s = load_settings()
     kept = pd.DataFrame([
-        {"ticker": "UAL", "metric": "revenue", "period_type": "Q", "period_end": date(2025, 3, 31)},
-        {"ticker": "UAL", "metric": "revenue", "period_type": "Q", "period_end": date(2025, 9, 30)}])
+        {"ticker": "UAL", "metric": "revenue", "period_type": "Q", "period_end": date(2025, 3, 31), "value": 5.0},
+        {"ticker": "UAL", "metric": "revenue", "period_type": "Q", "period_end": date(2025, 9, 30), "value": 6.0}])
     rej = pd.DataFrame([{"ticker": "UAL", "metric": "revenue", "period_end": date(2025, 6, 30), "reason": "odd_period_length"}])
     m = missing_quarters(kept, rej, s.model_copy(update={"financial_metrics": {"revenue": s.financial_metrics["revenue"]}}))
     assert list(m["quarter_end"]) == [date(2025, 6, 30)] and "odd_period_length" in m.iloc[0]["reason"]
     raw = b"observation_date,VIXCLS\n2014-12-31,.\n2015-01-02,.\n2015-01-05,17.5\n"
     assert fred_missing(raw, "VIXCLS", date(2015, 1, 1))["n"] == 1
+
+
+def test_missing_quarter_reasons_zero_line_and_year_end_only():
+    from dashboard.silver import missing_quarters
+    s = load_settings()
+    s1 = s.model_copy(update={"financial_metrics": {"short_term_investments": s.financial_metrics["short_term_investments"]}})
+    kept = pd.DataFrame([{"ticker": "DAL", "metric": "short_term_investments", "period_type": "I", "period_end": d, "value": v}
+                         for d, v in [(date(2018, 12, 31), 3.0), (date(2019, 12, 31), 2.0), (date(2024, 12, 31), 0.0)]] +
+                        [{"ticker": "DAL", "metric": "revenue", "period_type": "Q", "period_end": date(2025, 6, 30), "value": 9.0}])
+    m = missing_quarters(kept, pd.DataFrame(), s1).set_index("quarter_end")["reason"]
+    assert "year-end" in m[date(2019, 6, 30)]
+    assert "counted as 0" in m[date(2025, 6, 30)]

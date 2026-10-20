@@ -23,12 +23,10 @@ Cleaning rules (each one is a thesis decision you can defend):
            dated at the cover date, newest filing wins. Used only for market cap.
            A cover date later than the filing date (a typo in the filing) is replaced by the filing date.
 
-Audit trail (nothing is dropped silently):
-  silver.sec_rejected   every SEC number NOT used, one row each, with its reason and, where another
-                        value won, the value and filing that won (restatements become visible).
-  silver.missing_quarter every expected quarter with no value, per company x metric, and why.
-  silver.drop_summary   counts per source x company/series x reason (incl. FRED '.' days and SEC
-                        values before the project start, which are counted but not listed row by row).
+Drop rule (nothing is dropped silently, and dropped values are NOT stored):
+  every value that is not used is dropped for one named reason; only the COUNT per reason is kept.
+  silver.drop_summary    counts per source x company/series x metric x reason (SEC and FRED).
+  silver.missing_quarter every expected quarter with no value, per company x metric, and why (no values).
 
 Run:  python -m dashboard.silver
 """
@@ -134,22 +132,7 @@ CREATE TABLE IF NOT EXISTS silver.share_count (
     PRIMARY KEY (ticker, as_of)
 );
 
-CREATE TABLE IF NOT EXISTS silver.sec_rejected (
-    ticker        TEXT NOT NULL,
-    metric        TEXT NOT NULL,
-    xbrl_tag      TEXT,
-    form          TEXT,
-    period_start  DATE,
-    period_end    DATE,
-    months        INTEGER,                   -- 0 = instant, NULL = odd length
-    value         DOUBLE PRECISION,
-    filed         DATE,
-    accn          TEXT,
-    reason        TEXT NOT NULL,
-    kept_value    DOUBLE PRECISION,          -- the value used instead (if any)
-    kept_accn     TEXT,                      -- the filing it came from
-    logged_at     TIMESTAMPTZ NOT NULL DEFAULT now()
-);
+DROP TABLE IF EXISTS silver.sec_rejected;
 
 CREATE TABLE IF NOT EXISTS silver.missing_quarter (
     ticker        TEXT NOT NULL,
@@ -366,8 +349,9 @@ def _raw_entries(facts: dict, spec: FinancialMetric):
 
 
 def audit_sec(facts: dict, ticker: str, s: Settings, kept: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
-    """Explain every SEC entry that is not in `kept` (the rows build_sec_facts returned).
-    Returns (row-level rejections, summary counts). Rows before the project start are only counted."""
+    """Name the reason every SEC entry that is not in `kept` was dropped.
+    Returns (in-memory reasons per dropped entry - used only to explain missing quarters, never stored,
+    count per reason - stored in silver.drop_summary)."""
     start = pd.Timestamp(s.project.start_date)
     rows, counts = [], {}
     k = kept[kept["ticker"] == ticker] if len(kept) and "ticker" in kept else pd.DataFrame()
@@ -486,8 +470,17 @@ def missing_quarters(kept: pd.DataFrame, rejected: pd.DataFrame, s: Settings) ->
                 if q in have:
                     continue
                 r = rej[(rej["ticker"] == t) & (rej["metric"] == metric) & (rej["qe"] == q)] if len(rej) else rej
+                mine = kq[(kq["ticker"] == t) & (kq["metric"] == metric)]
+                before = mine[mine["qe"] < q].sort_values("qe")
+                year_ends = set(mine[mine["qe"].map(lambda x: x.quarter == 4)]["qe"].map(lambda x: x.year))
+                interim_that_year = mine[(mine["qe"].map(lambda x: x.year) == q.year) & (mine["qe"].map(lambda x: x.quarter) < 4)]
                 if len(r):
                     reason = "only unusable values: " + ", ".join(sorted(set(r["reason"])))
+                elif len(before) and float(before.iloc[-1]["value"]) == 0 and not len(mine[mine["qe"] > q]):
+                    reason = (f"last reported value was 0 ({before.iloc[-1]['qe'].end_time.date()}); "
+                              "the line is no longer reported, so it is counted as 0")
+                elif q.quarter < 4 and (q.year in year_ends or q.year - 1 in year_ends) and not len(interim_that_year):
+                    reason = "reported only at year-end that year (the 10-Q did not tag it); left blank, not estimated"
                 else:
                     reason = "not reported in the SEC data for this quarter"
                 out.append({"ticker": t, "metric": metric, "quarter_end": q.end_time.date(), "reason": reason})
@@ -666,25 +659,16 @@ def _concat(frames: list[pd.DataFrame]) -> pd.DataFrame:
 
 
 # =========================================================================== run
-def write_audit(eng: Engine, rejected: pd.DataFrame, missing: pd.DataFrame, summary: list[dict],
-                tickers: list[str]) -> dict:
-    """Replace this run's audit tables (they describe the newest bronze snapshot, so they are rebuilt)."""
-    if len(rejected):                          # all-empty columns would otherwise be sent as text
-        rejected = rejected.assign(value=pd.to_numeric(rejected["value"], errors="coerce"),
-                                   kept_value=pd.to_numeric(rejected["kept_value"], errors="coerce"),
-                                   months=pd.to_numeric(rejected["months"], errors="coerce").astype("Int64"),
-                                   kept_accn=rejected["kept_accn"].astype(object))
+def write_audit(eng: Engine, missing: pd.DataFrame, summary: list[dict], tickers: list[str]) -> dict:
+    """Replace this run's drop counts and missing-quarter list (they describe the newest bronze snapshot)."""
     with eng.begin() as con:
-        con.execute(text("DELETE FROM silver.sec_rejected WHERE ticker = ANY(:t)"), {"t": tickers})
         con.execute(text("DELETE FROM silver.missing_quarter WHERE ticker = ANY(:t)"), {"t": tickers})
         con.execute(text("DELETE FROM silver.drop_summary"))
-        if len(rejected):
-            rejected.to_sql("sec_rejected", con, schema="silver", if_exists="append", index=False, chunksize=2000, method="multi")
         if len(missing):
             missing.to_sql("missing_quarter", con, schema="silver", if_exists="append", index=False, method="multi")
         if summary:
             pd.DataFrame(summary).to_sql("drop_summary", con, schema="silver", if_exists="append", index=False, method="multi")
-    return {"sec_rejected": len(rejected), "missing_quarter": len(missing)}
+    return {"dropped": int(sum(r["n"] for r in summary)), "missing_quarter": len(missing)}
 
 
 def run(s: Settings, eng: Engine, bronze: Path) -> dict:
@@ -738,7 +722,7 @@ def run(s: Settings, eng: Engine, bronze: Path) -> dict:
     _log(eng, "sec_fact", report["sec_fact"], files)
     rejected = _concat(rejected_frames)
     missing = missing_quarters(facts, rejected, s)
-    report.update(write_audit(eng, rejected, missing, drop_summary, [c.ticker for c in s.in_scope]))
+    report.update(write_audit(eng, missing, drop_summary, [c.ticker for c in s.in_scope]))
     shares = _concat(share_frames)
     report["share_count"] = upsert(eng, "silver.share_count", shares, ["ticker", "as_of"])
 

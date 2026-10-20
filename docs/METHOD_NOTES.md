@@ -33,22 +33,24 @@ and the **precision** from the manual audit (`run_news_audit_score.bat`, 50 head
 > "Source tiers reflect the researcher's judgement against documented criteria; a manual audit of
 > N kept headlines found X% relevant (tier 2: Y%, tier 3: Z%)."
 
-## 3b. Audit trail: no number is dropped silently (20 Oct 2026)
-Silver writes three audit tables on every run (rebuilt from the newest bronze snapshot):
-- `silver.sec_rejected` - every SEC number NOT used, one row each, with its reason and, where another value
-  won, the value and filing that won. Reasons: restated / repeated in a newer filing, lower-priority XBRL tag,
-  year-to-date total (used to derive a quarter / not needed / unused), incomplete sum, odd period length,
-  wrong period type, other report type (8-K, S-1), duplicate entry.
-- `silver.missing_quarter` - every expected quarter with no value, per company x metric, and why.
-- `silver.drop_summary` - counts per source x company/series x reason, incl. FRED days with no published value
-  and SEC values before the project start (counted, not listed).
-First real run (SEC files of 19 Oct 2026): 2,196 values kept; 5,034 not used, each with a reason
+## 3b. Drop rule: every dropped value has a named reason (20 Oct 2026)
+Silver drops every value it does not use for exactly one named reason and keeps only the count per
+reason (`silver.drop_summary`); the dropped values themselves are not stored, so the database stays lean.
+Reasons: repeated or restated in a newer filing (newest wins), lower-priority XBRL tag, year-to-date total
+(used to derive a quarter / not needed / unused), incomplete sum, odd period length, wrong period type,
+other report type (8-K, S-1), duplicate entry, before the project start; FRED: no value published.
+`silver.missing_quarter` lists every expected quarter that has no value, and why (no values stored).
+First real run (SEC files of 19 Oct 2026): 2,196 values kept; 5,034 dropped with a reason
 (2,440 repeated in newer filings, 944 year-to-date totals not needed, 841 lower-priority tags,
 233 restatements, 226 year-to-date totals used to derive quarters, 153 incomplete sums, 20 from 8-Ks);
-3,392 before the 2015 start (counted). 14 quarters missing, all Delta: current debt (Q1-Q3 2020) and
-short-term investments (most of 2019, Q1 2020, and every quarter since Q1 2025) - to check against the 10-Qs.
-> "No value is silently discarded: every rejected or missing figure is logged with its reason, and restated
-> figures are kept with the filing that replaced them."
+3,392 before the 2015 start. 14 quarters missing, all Delta, each explained and checked against the SEC data:
+- Short-term investments since Q1 2025: Delta reported $0 at 31 Dec 2024 (down from $1.1B a year earlier) and
+  then dropped the line; counted as 0, so its current net debt is correct.
+- Short-term investments Q1-Q3 2019 and Q1 2020, current debt Q1-Q3 2020: reported only at year-end in those
+  years (the 10-Qs did not tag them). Left blank, not estimated: net debt is blank for those quarters.
+  (Fixed 20 Oct 2026: blanks used to count as $0 investments, which overstated Delta's net debt in 2019-20.)
+> "Every value not used is dropped for a named reason and counted; missing quarters are listed with
+> their cause."
 
 ## 4. Sensitivities: estimates, robustness, wording  (audit #3, #6, #7)
 - Fuel: quarterly fuel expense regressed on the quarter's average jet fuel price (slope = implied gallons).
@@ -130,7 +132,9 @@ possible, report results separately for professionals.
   P/E on the last 4 quarters' net income (blank when a loss); EV/Revenue on the last 4 quarters;
   P/B blank when equity is negative. Each row states the quarter its "last 4 quarters" end on
   (companies report on different dates, so for a few weeks a year they differ).
-- **Net debt (same for every company, also used by the KPI card):** total debt = long-term + current debt,
+- **Net debt (same for every company, also used by the KPI card):** a blank investments line counts as 0
+  only after the company reported 0 and stopped showing it; any other blank leaves net debt blank (see 3b).
+   total debt = long-term + current debt,
   both including finance leases, excluding operating leases; minus liquidity = cash and equivalents +
   short-term investments. Fixed on 19 Oct 2026: the first version took whichever SEC line each company
   used, so Delta's excluded leases and current debt and American's counted only bare cash (missing about

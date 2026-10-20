@@ -48,12 +48,21 @@ def test_kpis_margins_and_yoy():
 
 def test_net_debt_is_like_for_like():
     f = fin_frame(n=4)
-    f.loc[1, "short_term_investments"] = np.nan                            # none held that quarter -> 0
+    f.loc[1, "short_term_investments"] = np.nan                            # untagged in one 10-Q -> unknown, not 0
     f.loc[2, "debt_current"] = np.nan                                      # missing debt part -> unknown, not smaller
     k = compute_kpis(f)
     nd = k[k.kpi == "net_debt"].set_index("period_end")["value"]
     q = quarters(4)
-    assert nd[q[1]] == pytest.approx(15e9) and q[2] not in nd.index
+    assert q[1] not in nd.index and q[2] not in nd.index and nd[q[3]] == pytest.approx(14e9)
+
+
+def test_investments_line_dropped_after_zero_counts_as_zero():
+    f = fin_frame(n=4)
+    f.loc[1, "short_term_investments"] = 0.0                               # reported $0 (Delta, Dec 2024) ...
+    f.loc[[2, 3], "short_term_investments"] = np.nan                       # ... then the line disappears
+    nd = compute_kpis(f).query("kpi == 'net_debt'").set_index("period_end")["value"]
+    q = quarters(4)
+    assert nd[q[2]] == pytest.approx(15e9) and nd[q[3]] == pytest.approx(15e9)   # 18 + 2 - (5 + 0)
 
 
 def test_unusual_flag_catches_a_jump():

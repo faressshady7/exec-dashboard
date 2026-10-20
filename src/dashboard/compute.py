@@ -124,11 +124,34 @@ def total_debt(df: pd.DataFrame) -> pd.Series:
     return get("long_term_debt") + get("debt_current")
 
 
+def _sti_filled(df: pd.DataFrame) -> pd.Series:
+    """Short-term investments with a blank counted as 0 ONLY after the company last reported 0 and stopped
+    showing the line (Delta: $0 at 31 Dec 2024, no line since). Any other blank stays blank (e.g. a 10-Q
+    that did not tag it), so liquidity is never understated by a guess. No line ever = none held = 0."""
+    if "short_term_investments" not in df:
+        return pd.Series(0.0, index=df.index)
+    sti = df["short_term_investments"].astype(float)
+    if "ticker" not in df or "period_end" not in df:
+        return sti.fillna(0)
+    out = sti.copy()
+    for _, g in df.groupby("ticker"):
+        g = g.sort_values("period_end")
+        v = sti.loc[g.index]
+        if v.notna().sum() == 0:
+            out.loc[g.index] = 0.0
+            continue
+        last = v.last_valid_index()
+        if v.loc[last] == 0:
+            after = g.index[g.index.get_loc(last) + 1:]
+            out.loc[after] = out.loc[after].fillna(0.0)
+    return out
+
+
 def liquidity(df: pd.DataFrame) -> pd.Series:
-    """Cash and equivalents + short-term investments. No investments line that quarter = none held
-    (e.g. Delta reports none after 2024), so it counts as 0; missing cash stays NaN."""
+    """Cash and equivalents + short-term investments; see _sti_filled for when a blank counts as 0.
+    Missing cash stays NaN."""
     get = lambda c: df[c] if c in df else pd.Series(np.nan, index=df.index)
-    return get("cash") + get("short_term_investments").fillna(0)
+    return get("cash") + _sti_filled(df)
 
 
 def compute_kpis(fin: pd.DataFrame, m=None) -> pd.DataFrame:
