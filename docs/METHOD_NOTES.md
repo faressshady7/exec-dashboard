@@ -40,6 +40,11 @@ Reasons: repeated or restated in a newer filing (newest wins), lower-priority XB
 (used to derive a quarter / not needed / unused), incomplete sum, odd period length, wrong period type,
 other report type (8-K, S-1), duplicate entry, before the project start; FRED: no value published.
 `silver.missing_quarter` lists every expected quarter that has no value, and why (no values stored).
+**Drop checker** (runs before any drop counts): "is this value needed?", i.e. would its quarter be left
+without a value. A value dropped because something else covers it (newer filing, preferred tag, duplicate)
+must never be needed; if it is, the run stops (DropCheckError) instead of losing data. A needed value that
+breaks a rule (8-K only, odd period, incomplete sum) is still dropped but counted as needed_<reason>, and its
+quarter appears in missing_quarter. First real run: 0 needed values among 5,034 drops.
 First real run (SEC files of 19 Oct 2026): 2,196 values kept; 5,034 dropped with a reason
 (2,440 repeated in newer filings, 944 year-to-date totals not needed, 841 lower-priority tags,
 233 restatements, 226 year-to-date totals used to derive quarters, 153 incomplete sums, 20 from 8-Ks);

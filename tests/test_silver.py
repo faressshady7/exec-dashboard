@@ -307,8 +307,8 @@ def test_audit_incomplete_sum_is_logged():
     spec = FinancialMetric(label="Capex", kind="duration",
                            tags=["PaymentsForFlightEquipment+PaymentsToAcquireOtherProductiveAssets"])
     _, rej, _ = _audit(j, {"capex": spec})
-    assert "incomplete_sum" in set(rej["reason"])
-    assert rej[rej.reason == "incomplete_sum"].iloc[0]["value"] == 3000
+    assert "needed_incomplete_sum" in set(rej["reason"])                         # nothing else covers Q3 -> needed
+    assert rej[rej.reason == "needed_incomplete_sum"].iloc[0]["value"] == 3000
 
 
 def test_missing_quarters_and_fred_gaps():
@@ -334,3 +334,24 @@ def test_missing_quarter_reasons_zero_line_and_year_end_only():
     m = missing_quarters(kept, pd.DataFrame(), s1).set_index("quarter_end")["reason"]
     assert "year-end" in m[date(2019, 6, 30)]
     assert "counted as 0" in m[date(2025, 6, 30)]
+
+
+# ---------------------------------------------------------------- drop checker: is the value needed?
+def test_drop_checker_flags_needed_value_that_breaks_a_rule():
+    j = facts_json({"Revenues": [fact("2016-01-01", "2016-03-31", 90, "2016-04-25", form="8-K", accn="0002")]})
+    kept, rej, summary = _audit(j, {"revenue": FinancialMetric(label="Revenue", kind="duration", tags=["Revenues"])})
+    assert list(rej["reason"]) == ["needed_form_not_used"]                       # only value for Q1 2016
+    assert {"source": "sec", "entity": "UAL", "metric": "revenue", "reason": "needed_form_not_used", "n": 1} in summary
+
+
+def test_drop_checker_stops_run_if_covered_drop_leaves_a_gap():
+    from dashboard.silver import DropCheckError, check_drops
+    rej = pd.DataFrame([{"ticker": "UAL", "metric": "revenue", "period_end": date(2025, 3, 31), "reason": "repeated_in_newer_filing"}])
+    kept = pd.DataFrame(columns=["metric", "period_type", "period_end"])
+    with pytest.raises(DropCheckError):
+        check_drops(rej, kept, {("revenue", "repeated_in_newer_filing"): 1})
+
+
+def test_drop_checker_passes_when_quarter_is_covered():
+    kept, rej, _ = _audit(CASHFLOW_YTD, {"operating_cash_flow": CF})
+    assert not rej["needed"].any()

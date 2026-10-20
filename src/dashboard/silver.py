@@ -25,6 +25,10 @@ Cleaning rules (each one is a thesis decision you can defend):
 
 Drop rule (nothing is dropped silently, and dropped values are NOT stored):
   every value that is not used is dropped for one named reason; only the COUNT per reason is kept.
+  Before a drop counts, a checker asks "is this value needed?" (would its quarter be left empty?).
+  A value dropped as superseded/duplicate that turns out to be needed stops the run (DropCheckError);
+  a needed value that breaks a rule (8-K only, odd period, incomplete sum) is counted as needed_<reason>
+  and its quarter is listed in silver.missing_quarter.
   silver.drop_summary    counts per source x company/series x metric x reason (SEC and FRED).
   silver.missing_quarter every expected quarter with no value, per company x metric, and why (no values).
 
@@ -430,8 +434,50 @@ def audit_sec(facts: dict, ticker: str, s: Settings, kept: pd.DataFrame) -> tupl
             seen.add(key)
             rows.append({**base, "reason": reason})
             counts[(metric, reason)] = counts.get((metric, reason), 0) + 1
+    rej = pd.DataFrame(rows)
+    rej, counts = check_drops(rej, k, counts)
     summary = [{"source": "sec", "entity": ticker, "metric": m, "reason": r, "n": n} for (m, r), n in sorted(counts.items())]
-    return pd.DataFrame(rows), summary
+    return rej, summary
+
+
+# Reasons that only make sense if ANOTHER value covers the same period. If one of them ever leaves a
+# quarter empty, the drop logic itself is wrong: stop the run instead of losing data.
+COVERED_REASONS = {"lower_priority_tag", "restated_in_newer_filing", "repeated_in_newer_filing",
+                   "duplicate_entry", "ytd_total_not_needed", "ytd_total_used_to_derive_quarter",
+                   "summed_into_total", "not_selected"}
+
+
+class DropCheckError(RuntimeError):
+    pass
+
+
+def check_drops(rej: pd.DataFrame, kept: pd.DataFrame, counts: dict) -> tuple[pd.DataFrame, dict]:
+    """The checker that runs BEFORE anything is dropped for good: is this value needed?
+    A value is needed when, without it, its quarter would have no value for that metric.
+    - 'covered' reasons (newer filing, preferred tag, duplicate, ...) must never be needed -> DropCheckError.
+    - other reasons (8-K only, odd period, incomplete sum, unusable year-to-date total) can be needed:
+      they are still dropped (they break a rule), but counted as 'needed_' + reason and listed in
+      missing_quarter, so a real gap is never hidden."""
+    if rej.empty:
+        return rej, counts
+    rej = rej.copy()
+    have = set()
+    if len(kept):
+        kq = kept[kept["period_type"].isin(["Q", "I"])]
+        have = {(m, pd.Period(pd.Timestamp(e), "Q")) for m, e in zip(kq["metric"], kq["period_end"])}
+    q = [pd.Period(pd.Timestamp(e), "Q") if e is not None else None for e in rej["period_end"]]
+    rej["needed"] = [p is not None and (m, p) not in have for m, p in zip(rej["metric"], q)]
+    bad = rej[rej["needed"] & rej["reason"].isin(COVERED_REASONS)]
+    if len(bad):
+        raise DropCheckError("Drop check failed - a value would be dropped although nothing else covers its quarter:\n"
+                             + bad[["ticker", "metric", "period_end", "reason"]].head(10).to_string(index=False))
+    for (m, r), n in rej[rej["needed"]].groupby(["metric", "reason"]).size().items():
+        counts[(m, r)] -= n
+        if counts[(m, r)] == 0:
+            del counts[(m, r)]
+        counts[(m, "needed_" + r)] = counts.get((m, "needed_" + r), 0) + n
+    rej.loc[rej["needed"], "reason"] = "needed_" + rej.loc[rej["needed"], "reason"]
+    return rej, counts
 
 
 def fred_missing(raw: bytes, series: str, start: date) -> dict:
@@ -475,7 +521,7 @@ def missing_quarters(kept: pd.DataFrame, rejected: pd.DataFrame, s: Settings) ->
                 year_ends = set(mine[mine["qe"].map(lambda x: x.quarter == 4)]["qe"].map(lambda x: x.year))
                 interim_that_year = mine[(mine["qe"].map(lambda x: x.year) == q.year) & (mine["qe"].map(lambda x: x.quarter) < 4)]
                 if len(r):
-                    reason = "only unusable values: " + ", ".join(sorted(set(r["reason"])))
+                    reason = "only values that break a rule: " + ", ".join(sorted({x.replace("needed_", "") for x in r["reason"]}))
                 elif len(before) and float(before.iloc[-1]["value"]) == 0 and not len(mine[mine["qe"] > q]):
                     reason = (f"last reported value was 0 ({before.iloc[-1]['qe'].end_time.date()}); "
                               "the line is no longer reported, so it is counted as 0")
