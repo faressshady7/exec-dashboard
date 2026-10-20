@@ -33,7 +33,8 @@ from sqlalchemy.engine import Engine
 from dashboard.config import AISettings, PROJECT_ROOT, Settings, load_settings
 from dashboard.insights import Fact, Insight, build_candidates, narrative_facts, score
 
-PROMPT_VERSION = "v3"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider
+PROMPT_VERSION = "v4"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
+                        # v4 (20 Oct 2026): storytelling - brief as Situation/Complication/Resolution, chart captions, start here
 
 SYSTEM = """You are a briefing analyst for airline executives.
 Rules you must follow:
@@ -62,9 +63,17 @@ class Round1(BaseModel):
 
 
 class Round2(BaseModel):
+    """v4: the brief is a three-step story (Segel & Heer 2010): situation -> complication -> resolution."""
     headline: str = Field(max_length=120)
-    brief: str
+    situation: str = ""
+    complication: str = ""
+    resolution: str = ""
+    brief: str = ""
     fact_ids_used: list[str]
+
+    def model_post_init(self, _ctx) -> None:
+        if not self.brief:
+            self.brief = " ".join(x.strip() for x in (self.situation, self.complication, self.resolution) if x.strip())
 
 
 class Recommendation(BaseModel):
@@ -73,14 +82,40 @@ class Recommendation(BaseModel):
     page: int = Field(ge=1, le=5)
 
 
+class Captions(BaseModel):
+    """v4: one sentence per chart saying what it shows TODAY (LEVA-style annotations)."""
+    jet_fuel: str = ""
+    share_price: str = ""
+    valuation: str = ""
+    peer_bars: str = ""
+    sensitivity: str = ""
+    fuel_exposure: str = ""
+    episodes: str = ""
+    kpi_matrix: str = ""
+
+
+CHARTS = {"jet_fuel": "page 1: jet fuel price over 10 years",
+          "share_price": "page 2: share prices of the three airlines, rebased to 100 three years ago",
+          "valuation": "page 2: market value, net debt and price/earnings of the three airlines",
+          "peer_bars": "page 2: operating margin and fuel share of costs, same quarter, all three airlines",
+          "sensitivity": "page 3: estimated effect on quarterly operating income of +10% jet fuel and +1 point rates",
+          "fuel_exposure": "page 3: which airline loses most per quarter if jet fuel rises 10%",
+          "episodes": "pages 3-4: past episodes (COVID oil crash, 2022 fuel spike, Fed hikes, last 12 months) replayed on today's quarter",
+          "kpi_matrix": "page 5: every KPI quarter by quarter, unusual quarters highlighted"}
+
+
 class Round3(BaseModel):
-    """Round 3 (v3): a short brief for every dashboard page + options to consider."""
+    """Round 3: a short note for every dashboard page + options to consider (v3);
+    chart captions and a 'start here' pointer (v4)."""
     page_briefing: str
     page_peers: str
     page_risks: str
     page_whatif: str
     page_detail: str
     recommendations: list[Recommendation] = Field(min_length=1, max_length=3)
+    start_page: int = Field(default=1, ge=1, le=5)
+    start_reason: str = ""
+    captions: Captions = Field(default_factory=Captions)
 
 
 PAGES = {"page_briefing": "1 Executive Briefing: market drivers today and where the company stands",
@@ -188,8 +223,11 @@ def round2_prompt(top: list[Insight], company: str, feedback: str = "") -> str:
         facts = "\n".join(f'    - id: {f.id} | {f.label} | display: "{f.display()}"' for f in c.facts) or "    (no numbers)"
         blocks.append(f"- insight: {c.title}\n  summary: {c.summary}\n  facts:\n{facts}")
     fb = f"\n\nYour previous draft was rejected: {feedback} Rewrite it using only the display values listed." if feedback else ""
-    return (f"Write a briefing for {company}'s executives from these insights.\n"
-            f"- headline: at most 12 words.\n- brief: 2-3 sentences, plain English, most important point first.\n"
+    return (f"Write a briefing for {company}'s executives from these insights, told as a short story.\n"
+            f"- headline: at most 12 words.\n"
+            f"- situation: ONE sentence - what is happening now (the most important fact first).\n"
+            f"- complication: ONE sentence - why it matters for {company} (a cost, a risk or a gap vs peers), with a number.\n"
+            f"- resolution: ONE sentence - what the executives could look at or consider next (never investment advice).\n"
             f"- fact_ids_used: ids of every fact whose number you cite.\n\n" + "\n".join(blocks) + fb)
 
 
@@ -199,12 +237,17 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "") -> str
         facts = "\n".join(f'    - id: {f.id} | {f.label} | display: "{f.display()}"' for f in c.facts) or "    (no numbers)"
         blocks.append(f"- [{c.type}] {c.title}\n  summary: {c.summary}\n  facts:\n{facts}")
     pages = "\n".join(f"- {k}: {v}" for k, v in PAGES.items())
+    charts = "\n".join(f"- {k}: {v}" for k, v in CHARTS.items())
     fb = f"\n\nYour previous answer was rejected: {feedback} Rewrite it using only the display values listed." if feedback else ""
     return (f"Write the page notes for {company}'s executive dashboard.\n"
             f"For EACH page below: 2-3 sentences, plain English, most important point first, at least one number.\n{pages}\n"
             f"Then recommendations: 2-3 options the executives could CONSIDER. Each: a title (at most 8 words), "
             f"a detail of 1-2 sentences saying why now (with a number from the facts) and the trade-off, and the page (1-5) "
-            f"where the evidence is. Use realistic airline actions only where the facts support them.\n\n"
+            f"where the evidence is. Use realistic airline actions only where the facts support them.\n"
+            f"Then start_page (1-5) and start_reason: the ONE page an executive should open first today and why, "
+            f"in one sentence with a number.\n"
+            f"Then captions: ONE sentence (at most 25 words) per chart saying what it shows TODAY for {company}, "
+            f"using a number from the facts. Leave a caption empty if no fact supports it.\n{charts}\n\n"
             + "\n".join(blocks) + fb)
 
 
@@ -265,10 +308,11 @@ def check_wording(brief: str, terms: dict[str, list[str]]) -> list[str]:
 
 
 def template_brief(top: list[Insight], company: str) -> Round2:
-    """Deterministic fallback: the computed summaries themselves (always correct)."""
-    body = " ".join(c.summary for c in top[:2] if c.facts)
-    ids = [f.id for c in top[:2] for f in c.facts]
-    return Round2(headline=top[0].title[:120], brief=body, fact_ids_used=ids)
+    """Deterministic fallback: the computed summaries themselves (always correct), in story order."""
+    parts = [c.summary for c in top[:3] if c.facts] + ["", "", ""]
+    ids = [f.id for c in top[:3] for f in c.facts]
+    return Round2(headline=top[0].title[:120], situation=parts[0], complication=parts[1], resolution=parts[2],
+                  fact_ids_used=ids)
 
 
 # =========================================================================== pipeline
@@ -285,6 +329,7 @@ class BriefResult:
     latency_ms: int
     timings: dict | None = None
     flags: list[str] = field(default_factory=list)      # wording check on the final brief
+    parts: dict = field(default_factory=dict)          # v4: situation / complication / resolution
 
 
 def pick_diverse(ranked: list[Insight], k: int, max_per_type: int = 2) -> list[Insight]:
@@ -336,13 +381,17 @@ def generate(s: Settings, cands: list[Insight], llm: LLM) -> BriefResult:
                          "passed": chk.passed, "unmatched": chk.unmatched, "model": llm.name, "flags": flags})
         if chk.passed:
             return BriefResult(draft.headline, draft.brief, llm.name, top, cands, chk, attempts,
-                               False, int((time.time() - t0) * 1000), timings, flags)
+                               False, int((time.time() - t0) * 1000), timings, flags, _parts(draft))
         feedback = f"these numbers are not in the facts: {', '.join(chk.unmatched)}."
     fb = template_brief(top, company)
     return BriefResult(fb.headline, fb.brief, llm.name, top, cands,
                        check_numbers(f"{fb.headline} {fb.brief}", facts), attempts, True,
                        int((time.time() - t0) * 1000), timings,
-                       check_wording(f"{fb.headline} {fb.brief}", s.ai.flag_terms))
+                       check_wording(f"{fb.headline} {fb.brief}", s.ai.flag_terms), _parts(fb))
+
+
+def _parts(r: Round2) -> dict:
+    return {"situation": r.situation, "complication": r.complication, "resolution": r.resolution}
 
 
 @dataclass
@@ -353,11 +402,15 @@ class NarrativeResult:
     flags: list[str]
     fallback_used: bool
     attempts: int
+    start_page: int = 1
+    start_reason: str = ""
+    captions: dict = field(default_factory=dict)
 
 
 def _narrative_text(r: Round3) -> str:
-    return " ".join([r.page_briefing, r.page_peers, r.page_risks, r.page_whatif, r.page_detail]
-                    + [f"{x.title} {x.detail}" for x in r.recommendations])
+    return " ".join([r.page_briefing, r.page_peers, r.page_risks, r.page_whatif, r.page_detail, r.start_reason]
+                    + [f"{x.title} {x.detail}" for x in r.recommendations]
+                    + list(r.captions.model_dump().values()))
 
 
 def template_narrative(items: list[Insight]) -> Round3:
@@ -383,7 +436,8 @@ def narrate(s: Settings, items: list[Insight], llm: LLM) -> NarrativeResult:
         chk = check_numbers(_narrative_text(r), facts)
         if chk.passed:
             return NarrativeResult({k: getattr(r, k) for k in PAGES}, [x.model_dump() for x in r.recommendations],
-                                   chk, check_wording(_narrative_text(r), s.ai.flag_terms), False, i + 1)
+                                   chk, check_wording(_narrative_text(r), s.ai.flag_terms), False, i + 1,
+                                   r.start_page, r.start_reason, r.captions.model_dump())
         feedback = f"these numbers are not in the facts: {', '.join(chk.unmatched)}."
     t = template_narrative(items)
     return NarrativeResult({k: getattr(t, k) for k in PAGES}, [x.model_dump() for x in t.recommendations],
@@ -426,7 +480,11 @@ ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS pages JSONB;
 ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS recommendations JSONB;
 ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS narrative_passed BOOLEAN;
 ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS narrative_flags JSONB;
-ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS narrative_fallback BOOLEAN
+ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS narrative_fallback BOOLEAN;
+ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS brief_parts JSONB;
+ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS start_page SMALLINT;
+ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS start_reason TEXT;
+ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS captions JSONB
 """
 
 
@@ -445,11 +503,14 @@ def store(eng: Engine, s: Settings, r: BriefResult, freeze: bool = False, n: "Na
             "cand": json.dumps([c.to_dict() for c in r.candidates], default=float),
             "ok": r.check.passed, "un": json.dumps(r.check.unmatched), "n": len(r.attempts),
             "fb": r.fallback_used, "lat": r.latency_ms, "fr": freeze, "wf": json.dumps(r.flags)}).scalar()
+        con.execute(text("UPDATE ai.brief SET brief_parts = :bp WHERE brief_id = :b"), {"bp": json.dumps(r.parts), "b": bid})
         if n is not None:
             con.execute(text("""UPDATE ai.brief SET pages = :p, recommendations = :r, narrative_passed = :ok,
-                                narrative_flags = :f, narrative_fallback = :fb WHERE brief_id = :b"""),
+                                narrative_flags = :f, narrative_fallback = :fb, start_page = :sp, start_reason = :sr,
+                                captions = :cap WHERE brief_id = :b"""),
                         {"p": json.dumps(n.pages), "r": json.dumps(n.recommendations), "ok": n.check.passed,
-                         "f": json.dumps(n.flags), "fb": n.fallback_used, "b": bid})
+                         "f": json.dumps(n.flags), "fb": n.fallback_used, "b": bid, "sp": n.start_page,
+                         "sr": n.start_reason or None, "cap": json.dumps(n.captions)})
         for a in r.attempts:
             con.execute(text("""INSERT INTO ai.attempt (brief_id, attempt_no, model, headline, brief, passed, unmatched, wording_flags)
                                 VALUES (:b, :n, :m, :h, :t, :p, :u, :wf)"""),
@@ -490,6 +551,10 @@ def _brief_one(s: Settings, llm: LLM, freeze: bool, eng) -> None:
           f" · {len(n.recommendations)} options" + (f" · wording flagged: {', '.join(n.flags)}" if n.flags else ""))
     for x in n.recommendations:
         print(f"  - [{x['page']}] {x['title']}: {x['detail']}")
+    print(f"START HERE: page {n.start_page} - {n.start_reason or '(none)'}")
+    for k, v in (n.captions or {}).items():
+        if v:
+            print(f"  caption {k}: {v}")
     args = argparse.Namespace(freeze=freeze)
 
     print(f"\nTOP {len(r.selected)} INSIGHTS (LEVA score = 0.5 significance + 0.3 relevance + 0.2 impact)")

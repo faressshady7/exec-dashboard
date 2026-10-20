@@ -78,7 +78,7 @@ def test_views_build_on_gold_tables_and_survive_recompute():
     from dashboard.ai import NarrativeResult, Check
     nar = NarrativeResult({"page_briefing": "a", "page_peers": "b", "page_risks": "c", "page_whatif": "d", "page_detail": "e"},
                           [{"title": "Consider X", "detail": "Because 11.0%.", "page": 2}, {"title": "Consider Y", "detail": "y", "page": 3}],
-                          Check(True, 1, []), [], False, 1)
+                          Check(True, 1, []), [], False, 1, 3, "Start with risks.", {"jet_fuel": "Fuel is up.", "valuation": ""})
     store(eng, s, generate(s, cands, MockLLM(reply)), n=nar)  # store() recreates the views
 
     with eng.connect() as con:
@@ -87,6 +87,7 @@ def test_views_build_on_gold_tables_and_survive_recompute():
         brief = con.execute(text("SELECT headline, check_passed FROM bi.ai_brief")).one()
         recs = con.execute(text("SELECT ticker, rank, title, page FROM bi.ai_recommendations ORDER BY rank")).all()
         pb = con.execute(text("SELECT page_peers FROM bi.ai_brief")).scalar()
+        story = con.execute(text("SELECT start_page, start_page_name, start_reason, cap_jet_fuel, cap_valuation FROM bi.ai_brief")).one()
         n_assump = con.execute(text("SELECT count(*) FROM bi.assumptions")).scalar()
         hist = con.execute(text("SELECT count(*) FROM bi.scenarios WHERE scenario_type = 'historical'")).scalar()
         val = con.execute(text("SELECT ticker, pe, caveat, pe_text, market_cap_text FROM bi.valuation ORDER BY sort_order")).all()
@@ -97,6 +98,7 @@ def test_views_build_on_gold_tables_and_survive_recompute():
         idx0 = con.execute(text("SELECT min(index_100), count(DISTINCT ticker) FROM bi.stock_history "
                                 "WHERE trade_date = (SELECT min(trade_date) FROM bi.stock_history)")).one()
     assert views == set(VIEWS)
+    assert tuple(story) == (3, "Risk Drivers", "Start with risks.", "Fuel is up.", None)   # empty caption -> NULL
     assert [r.ticker for r in w] == ["UAL", "DAL", "AAL"] and w[0].fuel_impact_per_pct == pytest.approx(-30e6)
     assert w[0].fuel_past_high_pct > 0 and "refinery" in w[1].caveat
     assert [r.ticker for r in val] == ["UAL", "DAL", "AAL"] and val[2].pe is None and "refinery" in val[1].caveat

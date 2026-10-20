@@ -126,7 +126,15 @@ VIEWS: dict[str, str] = {
                check_passed, fallback_used, wording_flags::text AS wording_flags, frozen,
                pages->>'page_briefing' AS page_briefing, pages->>'page_peers' AS page_peers,
                pages->>'page_risks' AS page_risks, pages->>'page_whatif' AS page_whatif,
-               pages->>'page_detail' AS page_detail, narrative_passed, narrative_fallback
+               pages->>'page_detail' AS page_detail, narrative_passed, narrative_fallback,
+               brief_parts->>'situation' AS situation, brief_parts->>'complication' AS complication,
+               brief_parts->>'resolution' AS resolution, start_page, start_reason,
+               CASE start_page WHEN 1 THEN 'Executive Briefing' WHEN 2 THEN 'Peer Benchmark' WHEN 3 THEN 'Risk Drivers'
+                               WHEN 4 THEN 'What-if' WHEN 5 THEN 'Company Detail' END AS start_page_name,
+               NULLIF(captions->>'jet_fuel', '') AS cap_jet_fuel, NULLIF(captions->>'share_price', '') AS cap_share_price,
+               NULLIF(captions->>'valuation', '') AS cap_valuation, NULLIF(captions->>'peer_bars', '') AS cap_peer_bars,
+               NULLIF(captions->>'sensitivity', '') AS cap_sensitivity, NULLIF(captions->>'fuel_exposure', '') AS cap_fuel_exposure,
+               NULLIF(captions->>'episodes', '') AS cap_episodes, NULLIF(captions->>'kpi_matrix', '') AS cap_kpi_matrix
         FROM ai.brief ORDER BY company, frozen DESC, created_at DESC""",
 
     # AI options to consider, one row each (from the same brief as above)

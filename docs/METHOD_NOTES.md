@@ -110,6 +110,16 @@ The daily GitHub run stores one brief per day, which builds the evaluation sampl
 > "Options are AI-generated from verified facts and always shown with their evidence and trade-off; the
 > executive decides."
 
+### 6d. AI storytelling (prompt v4, 20 Oct 2026)
+- **Story arc:** the brief is written as Situation -> Complication -> Resolution (one sentence each; Segel & Heer
+  2010 narrative structure; Gunklach et al. 2023). The three parts are stored separately and shown labelled.
+- **Chart captions:** one sentence per main chart (8 charts) saying what it shows today, from the facts only
+  (LEVA-style annotations, Zhao et al. 2025; Shao et al. 2024).
+- **Start here:** the AI names the one page to open first today and why (data-driven guidance instead of
+  LEVA's tour, which hinted at task answers).
+- All of it passes the same number check; if it fails, captions and "start here" are left empty (the
+  dashboard shows its fixed subtitles) rather than unchecked text. Shown only with the AI switch On.
+
 ### 6c. Evaluation design for the AI parts
 - Study switch "AI text On / Off" on every page (synced): Off hides the summary, page notes and options;
   everything else is identical, so "dashboard" vs "dashboard + AI" is a clean comparison.

@@ -294,7 +294,7 @@ ai:
   fallback_model: gemini-3.5-flash-lite   # used if the main model is rate-limited
   ollama_model: llama3.1:8b        # only if provider: ollama (local, offline)
   temperature: 0.2                 # low = consistent wording between runs
-  max_output_tokens: 4096         # includes the model's 'thinking' tokens
+  max_output_tokens: 8192         # includes the model's 'thinking' tokens; v4 round 3 is longer (captions, start here)
   thinking_level: low              # low | medium | high (more = slower, not needed for 3 sentences)
   candidates: 12                   # insights shown to the LLM in round 1
   pick: 3                          # insights in the final brief

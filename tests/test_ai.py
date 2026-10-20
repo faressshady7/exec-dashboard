@@ -169,7 +169,7 @@ def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
     terms = load_settings().ai.flag_terms
     assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
     assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
-    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v3"
+    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v4"
 
 
 
@@ -216,3 +216,32 @@ def test_page_notes_and_options_are_checked():
     from dashboard.ai import round3_prompt
     prompt = round3_prompt(_narrative_items(), "United Airlines")
     assert "CONSIDER" in prompt and "trade-off" in prompt and 'display: "-$379M"' in prompt
+
+
+# ---------------------------------------------------------------- v4 storytelling
+def test_brief_is_a_three_step_story_and_parts_are_kept():
+    s = load_settings()
+    cands = [insight(i) for i in range(1, 4)]
+    def reply(prompt, schema):
+        if schema is Round1:
+            return r1(cands, {})
+        assert "situation" in prompt and "complication" in prompt and "resolution" in prompt
+        return {"headline": "H", "situation": "Value is 11.0% now.", "complication": "That is a cost.",
+                "resolution": "Consider the trend.", "fact_ids_used": ["f1"]}
+    res = generate(s, cands, MockLLM(reply))
+    assert res.brief == "Value is 11.0% now. That is a cost. Consider the trend."
+    assert res.parts == {"situation": "Value is 11.0% now.", "complication": "That is a cost.", "resolution": "Consider the trend."}
+
+
+def test_captions_and_start_here_are_number_checked():
+    from dashboard.ai import CHARTS, MockLLM, narrate, round3_prompt
+    s = load_settings()
+    ok = dict(_round3("Fuel is $4.56/gal; trade-off: none."), start_page=3, start_reason="A 10% rise costs about $379M.",
+              captions={"jet_fuel": "Jet fuel is $4.56/gal today.", "fuel_exposure": "A 10% rise costs about $379M."})
+    good = narrate(s, _narrative_items(), MockLLM(lambda p, schema: ok))
+    assert not good.fallback_used and good.start_page == 3 and good.captions["jet_fuel"].startswith("Jet fuel")
+    bad = dict(ok, captions={"jet_fuel": "Jet fuel is $9.99/gal today."})        # invented number in a caption
+    res = narrate(s, _narrative_items(), MockLLM(lambda p, schema: bad))
+    assert res.fallback_used and res.captions == {} and res.start_reason == ""
+    prompt = round3_prompt(_narrative_items(), "United Airlines")
+    assert "start_page" in prompt and all(k in prompt for k in CHARTS)
