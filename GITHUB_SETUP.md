@@ -10,7 +10,7 @@ Both were pasted in a chat earlier, so make new ones before giving them to GitHu
   Then put the new password into your `.env` (the `DATABASE_URL` line).
 - **Gemini**: aistudio.google.com -> API keys -> delete the old key -> Create API key.
   Then run `set_gemini_key.bat` with the new key.
-- Run `run_db.bat` to check the connection still works.
+- Run `run_all.bat` (or `python -m dashboard.db`) to check the connection still works.
 
 ## 1. Put the project on GitHub (private)
 1. Make a free account at github.com (if you don't have one).
