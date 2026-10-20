@@ -1,20 +1,42 @@
 # Daily pipeline: refreshes the data AND keeps the free Supabase project awake
 # (Supabase pauses free projects after 7 days without database activity).
-# Runs every day at ~06:15 Cairo time; can also be started by hand (Actions tab -> Run workflow).
+# Two scheduled times: GitHub sometimes delays or drops scheduled runs, so a second
+# slot runs only if the first one did not succeed that day. Can also be started by hand.
 # Secrets needed (repo Settings -> Secrets and variables -> Actions): DATABASE_URL, GEMINI_API_KEY, FMP_API_KEY.
 name: daily-pipeline
 
 on:
   schedule:
-    - cron: "17 3 * * *"        # 03:17 UTC = 06:17 Cairo (summer) / 05:17 (winter); off the busy :00 slot
+    - cron: "17 3 * * *"        # 03:17 UTC = 06:17 Cairo (summer)
+    - cron: "47 5 * * *"        # backup: 05:47 UTC = 08:47 Cairo, skipped if today already succeeded
   workflow_dispatch: {}
 
 concurrency:
   group: daily-pipeline
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.guard.outputs.skip }}
+    steps:
+      - name: Skip if today's run already succeeded
+        id: guard
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ github.event_name }}" != "schedule" ]; then echo "skip=false" >> "$GITHUB_OUTPUT"; exit 0; fi
+          n=$(gh run list -R "${{ github.repository }}" -w daily-pipeline --status success --created ">=$(date -u +%F)" --json databaseId --jq length)
+          if [ "$n" -gt 0 ]; then echo "Already succeeded today - skipping"; echo "skip=true" >> "$GITHUB_OUTPUT"; else echo "skip=false" >> "$GITHUB_OUTPUT"; fi
+
   pipeline:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
