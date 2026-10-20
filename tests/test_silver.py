@@ -170,6 +170,12 @@ def test_full_load_is_idempotent(tmp_path):
         n_news = con.execute(text("select count(*) from silver.news_article")).scalar()
     assert first["fred_observation"] == 2 and (n_fred, n_q, n_news) == (2, 4, 1)
     assert second["sec_fact"] == first["sec_fact"]
+    with eng.connect() as con:                                  # audit tables rebuilt, not doubled
+        n_rej = con.execute(text("select count(*) from silver.sec_rejected")).scalar()
+        reasons = {r[0] for r in con.execute(text("select reason from silver.sec_rejected")).all()}
+        n_sum = con.execute(text("select count(*) from silver.drop_summary")).scalar()
+    assert n_rej == 2 and reasons == {"ytd_total_used_to_derive_quarter"} and n_sum >= 2
+    assert second["sec_rejected"] == first["sec_rejected"] == 2
 
 
 def test_minus_tag_flips_sign_and_is_only_a_fallback():
@@ -253,3 +259,67 @@ def test_prices_and_cover_page_shares():
     sh = parse_shares(facts, "UAL")
     assert sh["shares"].tolist() == [301.0, 302.0] and str(sh["as_of"].iloc[-1]) == "2026-07-23"
     assert parse_shares({"facts": {}}, "UAL").empty
+
+
+# ---------------------------------------------------------------- audit trail (every dropped number has a reason)
+def _audit(j, metric_tags):
+    from dashboard.silver import audit_sec
+    s = load_settings()
+    s = s.model_copy(update={"financial_metrics": metric_tags})
+    kept = build_sec_facts(j, "UAL", s)
+    rej, summary = audit_sec(j, "UAL", s, kept)
+    return kept, rej, summary
+
+
+def test_audit_restatement_shows_old_and_kept_value():
+    j = facts_json({"Revenues": [
+        fact("2025-01-01", "2025-03-31", 100, "2025-04-20"),
+        fact("2025-01-01", "2025-03-31", 105, "2026-04-20", accn="0009")]})
+    kept, rej, _ = _audit(j, {"revenue": FinancialMetric(label="Revenue", kind="duration", tags=["Revenues"])})
+    assert len(kept) == 1 and len(rej) == 1
+    r = rej.iloc[0]
+    assert r.reason == "restated_in_newer_filing" and r.value == 100 and r.kept_value == 105 and r.kept_accn == "0009"
+
+
+def test_audit_ytd_totals_explained_and_kept_values_not_listed():
+    kept, rej, _ = _audit(CASHFLOW_YTD, {"operating_cash_flow": CF})
+    assert sorted(rej["reason"]) == ["ytd_total_used_to_derive_quarter"] * 2       # 6M and 9M; 3M and FY are kept
+    assert set(rej["months"]) == {6, 9}
+
+
+def test_audit_other_form_lower_tag_and_before_start():
+    j = facts_json({
+        "Revenues": [fact("2016-01-01", "2016-03-31", 90, "2016-04-20"),
+                     fact("2016-01-01", "2016-03-31", 90, "2016-04-25", form="8-K", accn="0002"),
+                     fact("2010-01-01", "2010-03-31", 50, "2010-04-20")],                 # before 2015 start
+        "RevenueFromContractWithCustomerExcludingAssessedTax": [fact("2016-01-01", "2016-03-31", 91, "2016-04-21")]})
+    spec = FinancialMetric(label="Revenue", kind="duration",
+                           tags=["Revenues", "RevenueFromContractWithCustomerExcludingAssessedTax"])
+    kept, rej, summary = _audit(j, {"revenue": spec})
+    assert sorted(rej["reason"]) == ["form_not_used", "lower_priority_tag"]
+    assert {"source": "sec", "entity": "UAL", "metric": "revenue", "reason": "before_project_start", "n": 1} in summary
+
+
+def test_audit_incomplete_sum_is_logged():
+    j = facts_json({
+        "PaymentsForFlightEquipment": [fact("2026-01-01", "2026-06-30", 2000, "2026-07-20"),
+                                       fact("2026-01-01", "2026-09-30", 3000, "2026-10-20")],
+        "PaymentsToAcquireOtherProductiveAssets": [fact("2026-01-01", "2026-06-30", 658, "2026-07-20")]})
+    spec = FinancialMetric(label="Capex", kind="duration",
+                           tags=["PaymentsForFlightEquipment+PaymentsToAcquireOtherProductiveAssets"])
+    _, rej, _ = _audit(j, {"capex": spec})
+    assert "incomplete_sum" in set(rej["reason"])
+    assert rej[rej.reason == "incomplete_sum"].iloc[0]["value"] == 3000
+
+
+def test_missing_quarters_and_fred_gaps():
+    from dashboard.silver import fred_missing, missing_quarters
+    s = load_settings()
+    kept = pd.DataFrame([
+        {"ticker": "UAL", "metric": "revenue", "period_type": "Q", "period_end": date(2025, 3, 31)},
+        {"ticker": "UAL", "metric": "revenue", "period_type": "Q", "period_end": date(2025, 9, 30)}])
+    rej = pd.DataFrame([{"ticker": "UAL", "metric": "revenue", "period_end": date(2025, 6, 30), "reason": "odd_period_length"}])
+    m = missing_quarters(kept, rej, s.model_copy(update={"financial_metrics": {"revenue": s.financial_metrics["revenue"]}}))
+    assert list(m["quarter_end"]) == [date(2025, 6, 30)] and "odd_period_length" in m.iloc[0]["reason"]
+    raw = b"observation_date,VIXCLS\n2014-12-31,.\n2015-01-02,.\n2015-01-05,17.5\n"
+    assert fred_missing(raw, "VIXCLS", date(2015, 1, 1))["n"] == 1

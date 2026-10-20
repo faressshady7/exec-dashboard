@@ -23,6 +23,13 @@ Cleaning rules (each one is a thesis decision you can defend):
            dated at the cover date, newest filing wins. Used only for market cap.
            A cover date later than the filing date (a typo in the filing) is replaced by the filing date.
 
+Audit trail (nothing is dropped silently):
+  silver.sec_rejected   every SEC number NOT used, one row each, with its reason and, where another
+                        value won, the value and filing that won (restatements become visible).
+  silver.missing_quarter every expected quarter with no value, per company x metric, and why.
+  silver.drop_summary   counts per source x company/series x reason (incl. FRED '.' days and SEC
+                        values before the project start, which are counted but not listed row by row).
+
 Run:  python -m dashboard.silver
 """
 from __future__ import annotations
@@ -125,6 +132,41 @@ CREATE TABLE IF NOT EXISTS silver.share_count (
     accn       TEXT,
     loaded_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (ticker, as_of)
+);
+
+CREATE TABLE IF NOT EXISTS silver.sec_rejected (
+    ticker        TEXT NOT NULL,
+    metric        TEXT NOT NULL,
+    xbrl_tag      TEXT,
+    form          TEXT,
+    period_start  DATE,
+    period_end    DATE,
+    months        INTEGER,                   -- 0 = instant, NULL = odd length
+    value         DOUBLE PRECISION,
+    filed         DATE,
+    accn          TEXT,
+    reason        TEXT NOT NULL,
+    kept_value    DOUBLE PRECISION,          -- the value used instead (if any)
+    kept_accn     TEXT,                      -- the filing it came from
+    logged_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS silver.missing_quarter (
+    ticker        TEXT NOT NULL,
+    metric        TEXT NOT NULL,
+    quarter_end   DATE NOT NULL,
+    reason        TEXT NOT NULL,
+    logged_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (ticker, metric, quarter_end)
+);
+
+CREATE TABLE IF NOT EXISTS silver.drop_summary (
+    source        TEXT NOT NULL,             -- sec | fred
+    entity        TEXT NOT NULL,             -- ticker or FRED series
+    metric        TEXT NOT NULL,             -- metric, or '-' for FRED
+    reason        TEXT NOT NULL,
+    n             INTEGER NOT NULL,
+    logged_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS silver.load_log (
@@ -274,7 +316,8 @@ def build_sec_facts(facts: dict, ticker: str, s: Settings) -> pd.DataFrame:
             df = to_periods(df)
         else:
             df = df.assign(period_type="I", derived=False)
-        frames.append(df)
+        if not df.empty:                       # e.g. only half-year totals with nothing to derive from
+            frames.append(df)
     if not frames:
         return pd.DataFrame()
     out = pd.concat(frames, ignore_index=True)
@@ -289,6 +332,166 @@ def build_sec_facts(facts: dict, ticker: str, s: Settings) -> pd.DataFrame:
     out["fiscal_year"] = out["fiscal_year"].astype("Int64")
     return out
 
+
+
+# =========================================================================== audit trail
+REASONS = {
+    "form_not_used": "number comes from a report type other than 10-K/10-Q (e.g. 8-K, S-1)",
+    "before_project_start": "period ends before the project start date",
+    "odd_period_length": "period is not 3, 6, 9 or 12 months (e.g. a short period after a merger)",
+    "wrong_period_type": "a balance-sheet value for a flow metric, or the reverse",
+    "lower_priority_tag": "a preferred XBRL tag reports the same period",
+    "restated_in_newer_filing": "a newer filing reports a DIFFERENT value for the same period (restatement)",
+    "repeated_in_newer_filing": "a newer filing repeats the same value (comparative column)",
+    "duplicate_entry": "the same filing lists the same period twice",
+    "ytd_total_used_to_derive_quarter": "year-to-date total, used to calculate a single quarter",
+    "ytd_total_not_needed": "year-to-date total, the quarter was reported directly",
+    "ytd_total_unused": "year-to-date total, no quarter could be calculated from it",
+    "incomplete_sum": "part of a summed tag; another part is missing for this period, so no total",
+    "summed_into_total": "part of a summed tag, added into the total",
+    "not_selected": "another entry for a period ending the same day was selected",
+}
+
+
+def _raw_entries(facts: dict, spec: FinancialMetric):
+    """Every raw SEC entry for a metric's tags, as (raw_tag, entry). Summed tags yield their parts."""
+    gaap = facts.get("facts", {}).get("us-gaap", {})
+    for raw_tag in spec.tags:
+        tag = raw_tag.lstrip("-")
+        for part in tag.split("+"):
+            units = gaap.get(part, {}).get("units", {})
+            unit = "USD" if "USD" in units else next(iter(units), None)
+            for e in (units.get(unit, []) if unit else []):
+                yield raw_tag, part, e
+
+
+def audit_sec(facts: dict, ticker: str, s: Settings, kept: pd.DataFrame) -> tuple[pd.DataFrame, list[dict]]:
+    """Explain every SEC entry that is not in `kept` (the rows build_sec_facts returned).
+    Returns (row-level rejections, summary counts). Rows before the project start are only counted."""
+    start = pd.Timestamp(s.project.start_date)
+    rows, counts = [], {}
+    k = kept[kept["ticker"] == ticker] if len(kept) and "ticker" in kept else pd.DataFrame()
+
+    def win(metric, ptype, end):
+        if not len(k):
+            return None
+        m = k[(k["metric"] == metric) & (k["period_type"] == ptype) & (k["period_end"] == end)]
+        return m.iloc[0] if len(m) else None
+
+    gaap = facts.get("facts", {}).get("us-gaap", {})
+
+    def complete_periods(raw_tag):
+        """Periods (start, end) that EVERY part of a summed tag reports - the only ones that get a total."""
+        sets = []
+        for part in raw_tag.lstrip("-").split("+"):
+            sets.append({(e.get("start"), e["end"]) for e in gaap.get(part, {}).get("units", {}).get("USD", [])
+                         if e.get("form") in NUMBER_FORMS})
+        return set.intersection(*sets) if sets else set()
+
+    for metric, spec in s.financial_metrics.items():
+        seen = set()
+        sums = {t: complete_periods(t) for t in spec.tags if "+" in t}
+        for raw_tag, part, e in _raw_entries(facts, spec):
+            st = pd.to_datetime(e.get("start"), errors="coerce")
+            en = pd.to_datetime(e.get("end"), errors="coerce")
+            filed = pd.to_datetime(e.get("filed"), errors="coerce")
+            months = _months(st, en) if pd.notna(en) else None
+            base = {"ticker": ticker, "metric": metric, "xbrl_tag": part if "+" in raw_tag else raw_tag,
+                    "form": e.get("form"), "period_start": st.date() if pd.notna(st) else None,
+                    "period_end": en.date() if pd.notna(en) else None, "months": months,
+                    "value": e.get("val"), "filed": filed.date() if pd.notna(filed) else None,
+                    "accn": e.get("accn"), "kept_value": None, "kept_accn": None}
+            key = (raw_tag, part, e.get("start"), e.get("end"), e.get("accn"), e.get("val"))
+            if key in seen:
+                reason = "duplicate_entry"
+            elif pd.isna(en) or en < start:
+                counts[(metric, "before_project_start")] = counts.get((metric, "before_project_start"), 0) + 1
+                seen.add(key)
+                continue
+            elif e.get("form") not in NUMBER_FORMS:
+                reason = "form_not_used"
+            elif months is None:
+                reason = "odd_period_length"
+            elif (months == 0) != (spec.kind == "instant"):
+                reason = "wrong_period_type"
+            else:
+                ptype = "I" if months == 0 else "Q" if months == 3 else "FY" if months == 12 else None
+                w = win(metric, ptype, en.date()) if ptype else None
+                if "+" in raw_tag and (e.get("start"), e.get("end")) not in sums[raw_tag]:
+                    reason = "incomplete_sum"
+                elif ptype is None:                                        # 6 or 9 months year-to-date
+                    q = win(metric, "Q", en.date())
+                    reason = ("ytd_total_used_to_derive_quarter" if q is not None and bool(q["derived"])
+                              else "ytd_total_not_needed" if q is not None else "ytd_total_unused")
+                elif "+" in raw_tag:
+                    reason = ("summed_into_total" if w is not None and w["xbrl_tag"] == raw_tag
+                              else "incomplete_sum" if w is None else "lower_priority_tag")
+                elif w is None:
+                    reason = "not_selected"
+                elif w["accn"] == e.get("accn") and w["xbrl_tag"] == raw_tag and float(w["value"]) == float(
+                        (-1 if raw_tag.startswith("-") else 1) * e.get("val")) and not bool(w["derived"]):
+                    seen.add(key)
+                    continue                                            # this IS the kept value
+                elif bool(w["derived"]) and ptype == "Q":
+                    reason = "lower_priority_tag"
+                elif w["xbrl_tag"] != raw_tag:
+                    reason = "lower_priority_tag"
+                elif w["accn"] == e.get("accn"):
+                    reason = "duplicate_entry"
+                else:
+                    kept_v = float(w["value"]) * (-1 if raw_tag.startswith("-") else 1)
+                    reason = "repeated_in_newer_filing" if abs(kept_v - e.get("val")) < 0.5 else "restated_in_newer_filing"
+                if w is not None and reason not in ("summed_into_total",):
+                    base["kept_value"], base["kept_accn"] = float(w["value"]), w["accn"]
+            seen.add(key)
+            rows.append({**base, "reason": reason})
+            counts[(metric, reason)] = counts.get((metric, reason), 0) + 1
+    summary = [{"source": "sec", "entity": ticker, "metric": m, "reason": r, "n": n} for (m, r), n in sorted(counts.items())]
+    return pd.DataFrame(rows), summary
+
+
+def fred_missing(raw: bytes, series: str, start: date) -> dict:
+    """Days FRED lists with '.' (no value published) inside the project window - counted, never filled."""
+    n = 0
+    reader = csv.reader(io.StringIO(raw.decode("utf-8-sig")))
+    next(reader, None)
+    for r in reader:
+        if len(r) >= 2 and r[1].strip() in ("", ".") and date.fromisoformat(r[0].strip()) >= start:
+            n += 1
+    return {"source": "fred", "entity": series, "metric": "-", "reason": "no_value_published", "n": n}
+
+
+def missing_quarters(kept: pd.DataFrame, rejected: pd.DataFrame, s: Settings) -> pd.DataFrame:
+    """Every calendar quarter between the project start and each company's latest reported quarter
+    that has no value for a metric, with the most likely reason."""
+    cols = ["ticker", "metric", "quarter_end", "reason"]
+    if kept.empty:
+        return pd.DataFrame(columns=cols)
+    kq = kept[kept["period_type"].isin(["Q", "I"])].copy()
+    kq["qe"] = pd.to_datetime(kq["period_end"]).dt.to_period("Q")
+    rej = rejected.copy() if len(rejected) else pd.DataFrame(columns=["ticker", "metric", "period_end", "reason"])
+    if len(rej):
+        rej["qe"] = pd.to_datetime(rej["period_end"]).dt.to_period("Q")
+    first = pd.Period(pd.Timestamp(s.project.start_date), "Q")
+    out = []
+    for t in sorted(kq["ticker"].unique()):
+        last = kq[kq["ticker"] == t]["qe"].max()
+        for metric in s.financial_metrics:
+            have = set(kq[(kq["ticker"] == t) & (kq["metric"] == metric)]["qe"])
+            if not have:
+                out.append({"ticker": t, "metric": metric, "quarter_end": last.end_time.date(),
+                            "reason": "metric never reported under any configured tag"})
+                continue
+            for q in pd.period_range(max(first, min(have)), last, freq="Q"):
+                if q in have:
+                    continue
+                r = rej[(rej["ticker"] == t) & (rej["metric"] == metric) & (rej["qe"] == q)] if len(rej) else rej
+                if len(r):
+                    reason = "only unusable values: " + ", ".join(sorted(set(r["reason"])))
+                else:
+                    reason = "not reported in the SEC data for this quarter"
+                out.append({"ticker": t, "metric": metric, "quarter_end": q.end_time.date(), "reason": reason})
+    return pd.DataFrame(out, columns=cols)
 
 # =========================================================================== filings / news
 def parse_filings(raw: bytes, ticker: str, cik: int, start: date) -> pd.DataFrame:
@@ -463,6 +666,27 @@ def _concat(frames: list[pd.DataFrame]) -> pd.DataFrame:
 
 
 # =========================================================================== run
+def write_audit(eng: Engine, rejected: pd.DataFrame, missing: pd.DataFrame, summary: list[dict],
+                tickers: list[str]) -> dict:
+    """Replace this run's audit tables (they describe the newest bronze snapshot, so they are rebuilt)."""
+    if len(rejected):                          # all-empty columns would otherwise be sent as text
+        rejected = rejected.assign(value=pd.to_numeric(rejected["value"], errors="coerce"),
+                                   kept_value=pd.to_numeric(rejected["kept_value"], errors="coerce"),
+                                   months=pd.to_numeric(rejected["months"], errors="coerce").astype("Int64"),
+                                   kept_accn=rejected["kept_accn"].astype(object))
+    with eng.begin() as con:
+        con.execute(text("DELETE FROM silver.sec_rejected WHERE ticker = ANY(:t)"), {"t": tickers})
+        con.execute(text("DELETE FROM silver.missing_quarter WHERE ticker = ANY(:t)"), {"t": tickers})
+        con.execute(text("DELETE FROM silver.drop_summary"))
+        if len(rejected):
+            rejected.to_sql("sec_rejected", con, schema="silver", if_exists="append", index=False, chunksize=2000, method="multi")
+        if len(missing):
+            missing.to_sql("missing_quarter", con, schema="silver", if_exists="append", index=False, method="multi")
+        if summary:
+            pd.DataFrame(summary).to_sql("drop_summary", con, schema="silver", if_exists="append", index=False, method="multi")
+    return {"sec_rejected": len(rejected), "missing_quarter": len(missing)}
+
+
 def run(s: Settings, eng: Engine, bronze: Path) -> dict:
     ensure_tables(eng)
     start = s.project.start_date
@@ -473,11 +697,13 @@ def run(s: Settings, eng: Engine, bronze: Path) -> dict:
         stored = {r[0]: (r[1], r[2]) for r in con.execute(text(
             "SELECT series_id, max(obs_date), count(*) FROM silver.fred_observation GROUP BY series_id")).all()}
     frames, files = [], []
+    drop_summary: list[dict] = []
     for rf in s.risk_factors:
         f = latest_file(bronze / "fred" / rf.series, "*.csv")
         if not f:
             continue
         df = parse_fred(f.read_bytes(), rf.series, start)
+        drop_summary.append(fred_missing(f.read_bytes(), rf.series, start))
         # incremental: re-send only recent rows - but only if the stored history looks complete,
         # otherwise (e.g. an interrupted first load) reload the whole series
         if rf.series in stored and stored[rf.series][1] >= 0.98 * len(df):
@@ -489,13 +715,17 @@ def run(s: Settings, eng: Engine, bronze: Path) -> dict:
     _log(eng, "fred_observation", report["fred_observation"], sorted(set(files)))
 
     # ---- SEC numbers + filings
-    facts_frames, filing_frames, share_frames, files = [], [], [], []
+    facts_frames, filing_frames, share_frames, files, rejected_frames = [], [], [], [], []
     for c in s.in_scope:
         folder = f"{c.ticker}_{c.cik10}"
         f = latest_file(bronze / "sec" / "companyfacts" / folder, "*.json")
         if f:
             facts_json = json.loads(f.read_bytes())
-            facts_frames.append(build_sec_facts(facts_json, c.ticker, s))
+            kept_c = build_sec_facts(facts_json, c.ticker, s)
+            facts_frames.append(kept_c)
+            rej_c, summ_c = audit_sec(facts_json, c.ticker, s, kept_c)
+            rejected_frames.append(rej_c)
+            drop_summary += summ_c
             share_frames.append(parse_shares(facts_json, c.ticker))
             files.append(f"{folder}/{f.name}")
         g = latest_file(bronze / "sec" / "submissions" / folder, "*.json")
@@ -506,6 +736,9 @@ def run(s: Settings, eng: Engine, bronze: Path) -> dict:
     report["sec_fact"] = upsert(eng, "silver.sec_fact", facts, ["ticker", "metric", "period_type", "period_end"])
     report["filing"] = upsert(eng, "silver.filing", filings, ["accn"])
     _log(eng, "sec_fact", report["sec_fact"], files)
+    rejected = _concat(rejected_frames)
+    missing = missing_quarters(facts, rejected, s)
+    report.update(write_audit(eng, rejected, missing, drop_summary, [c.ticker for c in s.in_scope]))
     shares = _concat(share_frames)
     report["share_count"] = upsert(eng, "silver.share_count", shares, ["ticker", "as_of"])
 
