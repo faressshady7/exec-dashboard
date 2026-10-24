@@ -21,12 +21,10 @@ Both were pasted in a chat earlier, so make new ones before giving them to GitHu
    together with `.venv`, `data` and `logs`.) If you see `.env`, stop and tell Claude.
 5. Click **Publish repository**. Keep **"Keep this code private" TICKED**.
 
-## 1b. Add the daily schedule file (Claude can't write into `.github` folders - a safety rule)
-On github.com -> your repo -> **Add file** -> **Create new file**.
-- Name: `.github/workflows/daily.yml` (type it exactly; the slashes create the folders)
-- Content: open `setup/daily.yml` from the project folder, copy everything, paste.
-- Click **Commit changes**.
-- Then in GitHub Desktop click **Fetch origin / Pull** so your laptop has it too.
+## 1b. The daily schedule file (done)
+The schedule lives in `.github/workflows/daily.yml` on GitHub (daily run plus a backup run that is
+skipped if the day already succeeded). Claude can't write into `.github` folders (a safety rule), so
+edit it on github.com, then **Fetch origin / Pull** in GitHub Desktop.
 
 ## 2. Give GitHub the two secrets (encrypted, nobody can read them back)
 On github.com -> your repo -> **Settings** -> **Secrets and variables** -> **Actions** ->
