@@ -197,6 +197,108 @@ def flag_unusual(long: pd.DataFrame, m=None) -> pd.DataFrame:
     return long.drop(columns="qoq_sd")
 
 
+# =========================================================================== drivers ("why")
+# A change is split into parts that ADD UP to it exactly (arithmetic, not a model), so the dashboard can
+# say what drove it. "Mostly" = one part explains at least half of the change and points the same way.
+DRIVER_LABELS = {
+    "fuel": "fuel cost", "other_costs": "other operating costs", "revenue": "revenue",
+    "special_items": "items outside operating costs", "operating_cash_flow": "operating cash flow",
+    "capex": "capital spending", "debt": "total debt", "liquidity": "cash and short-term investments",
+}
+
+
+def _parts(kpi: str, now: pd.Series, before: pd.Series) -> tuple[float, float, str, dict]:
+    """(value now, value a year before, unit, {driver: contribution}) - contributions sum to the change."""
+    g = lambda r, c: float(r[c]) if c in r and pd.notna(r[c]) else np.nan
+    if kpi == "operating_margin_pct":
+        out = {}
+        for r, k in ((now, "n"), (before, "b")):
+            rev, fuel, opex, oi = g(r, "revenue"), g(r, "fuel_expense"), g(r, "operating_expenses"), g(r, "operating_income")
+            out[k] = (oi / rev * 100, fuel / rev * 100, (opex - fuel) / rev * 100, (rev - opex - oi) / rev * 100)
+        (mn, fn, on, sn), (mb, fb, ob, sb) = out["n"], out["b"]
+        # margin = 100 - fuel share of revenue - other-cost share - special items share
+        return mn, mb, "pp", {"fuel": -(fn - fb), "other_costs": -(on - ob), "special_items": -(sn - sb)}
+    if kpi == "operating_income":
+        d = lambda c: g(now, c) - g(before, c)
+        rev, fuel, opex, oi = d("revenue"), d("fuel_expense"), d("operating_expenses"), d("operating_income")
+        return g(now, "operating_income"), g(before, "operating_income"), "USD", \
+            {"revenue": rev, "fuel": -fuel, "other_costs": -(opex - fuel), "special_items": oi - (rev - opex)}
+    if kpi == "free_cash_flow":
+        return (g(now, "operating_cash_flow") - g(now, "capex"), g(before, "operating_cash_flow") - g(before, "capex"), "USD",
+                {"operating_cash_flow": g(now, "operating_cash_flow") - g(before, "operating_cash_flow"),
+                 "capex": -(g(now, "capex") - g(before, "capex"))})
+    if kpi == "net_debt":
+        return (g(now, "total_debt") - g(now, "liquidity"), g(before, "total_debt") - g(before, "liquidity"), "USD",
+                {"debt": g(now, "total_debt") - g(before, "total_debt"),
+                 "liquidity": -(g(now, "liquidity") - g(before, "liquidity"))})
+    raise ValueError(kpi)
+
+
+DRIVER_KPIS = ("operating_margin_pct", "operating_income", "free_cash_flow", "net_debt")
+SMALL = {"pp": 0.05, "USD": 1e6}          # parts smaller than this are noise, never named as a driver
+
+
+def drivers(fin: pd.DataFrame) -> pd.DataFrame:
+    """For each company's latest quarter vs the same quarter a year earlier (seasonality removed):
+    each key KPI's change split into parts that add up to it, and the main driver if there is one."""
+    df = fin.copy()
+    df["total_debt"], df["liquidity"] = total_debt(df), liquidity(df)
+    rows = []
+    for t, g in df.groupby("ticker"):
+        g = g.sort_values("period_end").set_index("period_end")
+        latest = g.index.max()
+        prior = latest - pd.DateOffset(years=1)
+        if prior not in g.index:
+            continue
+        now, before = g.loc[latest], g.loc[prior]
+        for kpi in DRIVER_KPIS:
+            try:
+                vn, vb, unit, parts = _parts(kpi, now, before)
+            except (KeyError, ZeroDivisionError):
+                continue
+            if any(pd.isna(v) for v in [vn, vb, *parts.values()]):
+                continue
+            change = vn - vb
+            ranked = sorted(parts.items(), key=lambda kv: -abs(kv[1]))
+            top, top_v = ranked[0]
+            same_way = np.sign(top_v) == np.sign(change) and abs(change) > SMALL[unit]
+            strength = ("unchanged" if abs(change) <= SMALL[unit] else
+                        "mostly" if same_way and abs(top_v) >= 0.5 * abs(change) and abs(top_v) >= 0.5 * sum(abs(v) for v in parts.values())
+                        else "partly" if same_way else "mixed")
+            for rank, (d, v) in enumerate(ranked, 1):
+                rows.append({"ticker": t, "kpi": kpi, "label": KPIS.get(kpi, ("Operating income",))[0],
+                             "period_end": latest, "quarter_label": now["quarter_label"],
+                             "compared_with": before["quarter_label"], "value_now": vn, "value_before": vb,
+                             "change": change, "unit": unit, "driver": d, "driver_label": DRIVER_LABELS[d],
+                             "contribution": v, "rank": rank, "is_main": rank == 1 and strength in ("mostly", "partly"),
+                             "strength": strength, "noise": abs(v) < SMALL[unit]})
+    return pd.DataFrame(rows)
+
+
+def driver_sentence(g: pd.DataFrame) -> str:
+    """Plain sentence for one KPI's breakdown, written by code (so 'mostly because' rests on arithmetic)."""
+    r = g.iloc[0]
+    up = r["change"] >= 0
+    unit = r["unit"]
+    fmt = (lambda v: f"{abs(v):.1f} pp") if unit == "pp" else (lambda v: _fmt(abs(v), "USD"))
+    head = f"{r['label']} {'rose' if up else 'fell'} {fmt(r['change'])} ({r['quarter_label']} vs {r['compared_with']})"
+    main = g[g["rank"] == 1].iloc[0]
+    if r["strength"] == "unchanged":
+        return f"{r['label']} was about unchanged ({r['quarter_label']} vs {r['compared_with']})."
+    if r["strength"] == "mixed":
+        parts = ", ".join(f"{x.driver_label} {'+' if x.contribution >= 0 else '-'}{fmt(x.contribution)}"
+                          for x in g[~g["noise"]].itertuples())
+        return f"{head}: no single driver ({parts})."
+    word = "mostly" if r["strength"] == "mostly" else "partly"
+    sign = "+" if main["contribution"] >= 0 else "-"
+    s = f"{head}, {word} because of {main['driver_label']} ({sign}{fmt(main['contribution'])} of the change)"
+    against = g[(g["rank"] > 1) & ~g["noise"] & (np.sign(g["contribution"]) != np.sign(r["change"]))]
+    if len(against):
+        a = against.iloc[0]
+        s += f", partly offset by {a['driver_label']} ({'+' if a['contribution'] >= 0 else '-'}{fmt(a['contribution'])})"
+    return s + "."
+
+
 # =========================================================================== peers
 def peer_gaps(kpis: pd.DataFrame, s: Settings) -> pd.DataFrame:
     """For each KPI: the latest quarter reported by all companies, focal vs each peer in that SAME quarter."""
@@ -466,6 +568,9 @@ def run(s: Settings, eng: Engine) -> dict[str, pd.DataFrame]:
            "valuation": valuation(prices, shares, fin, s)}
     from dashboard.attention import attention
     out["attention"] = attention(kpis, pg, snap, sens, out["valuation"], s)
+    out["driver"] = drivers(fin)
+    for (t, k), g in out["driver"].groupby(["ticker", "kpi"]) if not out["driver"].empty else []:
+        print(f"::notice title=Why {t} {k}::{driver_sentence(g)}")
     from dashboard.bi import create_views, drop_views
     with eng.begin() as con:
         drop_views(con)                    # Power BI views sit on these tables; rebuilt right after

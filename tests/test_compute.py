@@ -214,3 +214,28 @@ def test_past_range_flag_combined_and_historical_scenarios():
     assert h["impact_q"] == pytest.approx(-30e6 * 100, rel=1e-6)          # -$30M per 1% x +100%
     assert h["within_past_range"] is False or h["within_past_range"] == False
     assert (grid.scenario_type == "combined").sum() == 3 * 4
+
+
+# ---------------------------------------------------------------- drivers ("why")
+def test_driver_parts_add_up_and_name_the_main_driver():
+    from dashboard.compute import drivers, driver_sentence
+    f = fin_frame(fuel_px=np.r_[np.full(8, 2.0), np.full(4, 3.0)])     # fuel jumps in the last year
+    d = drivers(f)
+    for (_, k), g in d.groupby(["ticker", "kpi"]):
+        assert g["contribution"].sum() == pytest.approx(g["change"].iloc[0], abs=1e-6)   # exact split
+    m = d[d.kpi == "operating_margin_pct"]
+    main = m[m["rank"] == 1].iloc[0]
+    assert main["driver"] == "fuel" and main["strength"] == "mostly" and main["change"] < 0
+    s = driver_sentence(m)
+    assert s.startswith("Operating margin fell") and "mostly because of fuel cost" in s
+
+
+def test_flat_kpi_is_reported_as_unchanged_not_explained():
+    from dashboard.compute import drivers, driver_sentence
+    f = fin_frame()
+    f["operating_cash_flow"] = np.linspace(1.5e9, 2.5e9, 12)          # cash flow up ...
+    f["capex"] = np.linspace(1.0e9, 2.0e9, 12)                        # ... capex up the same: FCF flat
+    g = drivers(f)
+    fcf = g[g.kpi == "free_cash_flow"]
+    assert fcf["strength"].iloc[0] == "unchanged" and not fcf["is_main"].any()
+    assert "about unchanged" in driver_sentence(fcf)
