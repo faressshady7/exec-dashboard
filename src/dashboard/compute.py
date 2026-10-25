@@ -199,11 +199,17 @@ def flag_unusual(long: pd.DataFrame, m=None) -> pd.DataFrame:
 
 # =========================================================================== peers
 def peer_gaps(kpis: pd.DataFrame, s: Settings) -> pd.DataFrame:
-    """For each KPI: the focal company's latest quarter vs each peer in the SAME quarter."""
+    """For each KPI: the latest quarter reported by all companies, focal vs each peer in that SAME quarter."""
     rows = []
     focal = kpis[kpis["ticker"] == s.focal_company]
+    n_all = kpis["ticker"].nunique()
     for kpi, f in focal.groupby("kpi"):
-        latest = f["period_end"].max()
+        # the latest quarter that EVERY company has reported, so the three are always compared like for like
+        # (if one airline has not filed yet, its newer quarter waits; the Company Detail page shows it)
+        k = kpis[(kpis["kpi"] == kpi) & kpis["period_end"].isin(f["period_end"])]
+        counts = k.groupby("period_end")["ticker"].nunique()
+        full = counts[counts == n_all]
+        latest = full.index.max() if len(full) else f["period_end"].max()
         same_q = kpis[(kpis["kpi"] == kpi) & (kpis["period_end"] == latest)]
         if len(same_q) < 2:
             continue

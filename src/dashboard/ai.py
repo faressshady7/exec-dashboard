@@ -123,6 +123,8 @@ CHART_EVIDENCE = {"jet_fuel": ("market_position", "exposure"), "share_price": ("
                   "valuation": ("valuation", "peer_gap"), "peer_bars": ("peer_gap",),
                   "sensitivity": ("exposure",), "fuel_exposure": ("exposure", "peer_gap"),
                   "episodes": ("scenario",), "kpi_matrix": ("trend", "change_point")}
+# charts that show ONE KPI only: their evidence is that KPI's insight, not every peer comparison
+CHART_ONLY = {"peer_bars": ("peer:operating_margin_pct",)}
 # room on the dashboard: (title, caption) in characters, from each chart panel's width
 # which computed insights each page note may draw on (so a page talks about what is on that page)
 PAGE_EVIDENCE = {"page_briefing": ("market_position", "exposure", "peer_gap", "trend", "change_point", "news_event"),
@@ -298,7 +300,8 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "") -> str
     pages = "\n".join(f"- {k}: {v}" for k, v in PAGES.items())
     charts = []
     for k, v in CHARTS.items():
-        ev = [c.id for c in items if c.type in CHART_EVIDENCE[k] and c.facts]
+        ev = [c.id for c in items if c.type in CHART_EVIDENCE[k] and c.facts
+              and (k not in CHART_ONLY or c.id in CHART_ONLY[k])]
         tmax, cmax = CHART_ROOM[k]
         charts.append(f"- {k}: {v} | evidence insights: {', '.join(ev) or 'none'} | title <= {tmax} chars, caption <= {cmax} chars")
     fb = (f"\n\nSome items of your previous answer were rejected: {feedback}\n"
@@ -517,8 +520,8 @@ def _item_ok(text_: str, facts: list[Fact], limit: int = 0) -> tuple[bool, str]:
     return chk.passed, ("" if chk.passed else "numbers not in this chart's or page's facts: " + ", ".join(chk.unmatched))
 
 
-def _evidence(items: list[Insight], types: tuple) -> list[Fact]:
-    return [f for c in items if c.type in types for f in c.facts]
+def _evidence(items: list[Insight], types: tuple, only: tuple = ()) -> list[Fact]:
+    return [f for c in items if c.type in types and (not only or c.id in only) for f in c.facts]
 
 
 def narrate(s: Settings, items: list[Insight], llm: LLM) -> NarrativeResult:
@@ -552,7 +555,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM) -> NarrativeResult:
                     rejected.append(f"{k} ({why or 'empty'})")
         for k, st in r.captions.model_dump().items():
             tmax, cmax = CHART_ROOM[k]
-            ev = _evidence(items, CHART_EVIDENCE[k])
+            ev = _evidence(items, CHART_EVIDENCE[k], CHART_ONLY.get(k, ()))
             ev_ids = {f.id for f in ev}
             outside = [i for i in st.get("fact_ids", []) if i not in ev_ids]
             allowed = [f for f in ev if f.id in set(st.get("fact_ids", []))] or ev

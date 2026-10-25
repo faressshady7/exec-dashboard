@@ -334,4 +334,8 @@ def scenario_insights(sc: pd.DataFrame, focal: str) -> list[Insight]:
 def narrative_facts(s: Settings, eng: Engine, cands: list[Insight]) -> list[Insight]:
     """Everything the page briefs and recommendations may cite: the ranked candidates + market view + scenarios."""
     extra = valuation_insights(_read(eng, "valuation"), s.focal_company) + scenario_insights(_read(eng, "scenario"), s.focal_company)
-    return cands + extra
+    have = {c.id for c in cands}
+    peers = [p for p in peer_insights(_read(eng, "peer_gap"), s.focal_company,
+                                      {c.ticker: "; ".join(c.caveats) for c in s.companies})
+             if p.id not in have and p.id in ("peer:operating_margin_pct", "peer:fuel_share_opex_pct")]
+    return cands + peers + extra             # the peer charts always have their own KPI as evidence

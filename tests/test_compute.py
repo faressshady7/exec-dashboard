@@ -114,6 +114,17 @@ def test_peer_gap_ranks_by_direction():
     assert d2a.loc["UAL", "gap_vs_peer_avg"] == pytest.approx(25.0 - (12.5 + 25.0) / 2)
 
 
+def test_peer_gap_waits_for_the_quarter_every_airline_has_reported():
+    s = load_settings()
+    fin = pd.concat([fin_frame("UAL", "focal"), fin_frame("DAL", "peer"), fin_frame("AAL", "peer")])
+    k = compute_kpis(fin.reset_index(drop=True))
+    newest = k["period_end"].max()
+    k = k[~((k.ticker == "AAL") & (k.period_end == newest))]          # AAL has not filed the newest quarter yet
+    pg = peer_gaps(k, s)
+    assert (pg["period_end"] < newest).all()                            # compared in the older, common quarter
+    assert (pg.groupby("kpi")["ticker"].nunique() == 3).all()           # all three airlines in every comparison
+
+
 def test_market_snapshot_uses_growth_for_cpi():
     d = pd.date_range("2015-01-01", "2026-10-01", freq="MS")
     cpi = pd.DataFrame({"code": "inflation", "label": "CPI", "unit": "index", "category": "macro",
