@@ -169,7 +169,7 @@ def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
     terms = load_settings().ai.flag_terms
     assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
     assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
-    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v5"
+    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v6"
 
 
 
@@ -295,7 +295,7 @@ def test_chart_story_has_action_title_and_so_what_caption_each_checked_alone():
         seen.append(p)
         title = "United loses most if fuel rises: $379M a quarter" if len(seen) > 1 else "Fuel costs $999M"
         return dict(_round3("Fuel is $4.56/gal; trade-off: none."), captions={
-            "fuel_exposure": {"title": title, "caption": "That is the cost of a 10% rise at $4.56/gal."},
+            "fuel_exposure": {"title": title, "caption": "That is the estimated quarterly cost of a 10% rise."},
             "peer_bars": {"title": "x" * (CHART_ROOM["peer_bars"][0] + 1), "caption": ""}})
     res = narrate(s, _narrative_items(), MockLLM(reply))
     assert res.titles["fuel_exposure"].startswith("United loses most")      # fixed in the targeted rewrite
@@ -303,4 +303,27 @@ def test_chart_story_has_action_title_and_so_what_caption_each_checked_alone():
     assert "peer_bars" not in res.titles                                     # too long for its panel: dropped
     assert res.coverage["titles"] == "1/8" and res.coverage["captions"] == "1/8"
     prompt = round3_prompt(_narrative_items(), "United Airlines")
-    assert "evidence: exp" in prompt and "action title" in prompt and "so-what" in prompt
+    assert "evidence insights: exp" in prompt and "action title" in prompt and "so-what" in prompt
+
+
+# ---------------------------------------------------------------- v6 numbers must match THEIR chart
+def test_number_from_another_chart_is_rejected_even_if_it_is_a_real_fact():
+    from dashboard.ai import MockLLM, narrate
+    s = load_settings()
+    story = {"fuel_exposure": {"title": "Jet fuel is $4.56/gal", "caption": "", "fact_ids": []},     # jet-fuel chart's number
+             "jet_fuel": {"title": "Jet fuel at $4.56/gal", "caption": "", "fact_ids": ["jet_fuel.latest"]},
+             "sensitivity": {"title": "A 10% rise costs $379M", "caption": "", "fact_ids": ["jet_fuel.latest"]}}  # cites another chart
+    res = narrate(s, _narrative_items(), MockLLM(lambda p, schema: dict(_round3("Fuel is $4.56/gal; trade-off: none."),
+                                                                        captions=story)))
+    assert res.titles == {"jet_fuel": "Jet fuel at $4.56/gal"}
+    assert res.coverage["titles"] == "1/8"
+
+
+def test_double_negative_and_start_here_on_page_1_are_rejected():
+    from dashboard.ai import MockLLM, _item_ok, narrate
+    assert not _item_ok("A 10% rise reduces operating income by -$379M.", _narrative_items()[0].facts)[0]
+    assert _item_ok("A 10% rise cuts operating income by $379M.", _narrative_items()[0].facts)[0]
+    s = load_settings()
+    res = narrate(s, _narrative_items(), MockLLM(lambda p, schema: dict(_round3("Fuel is $4.56/gal; trade-off: none."),
+                                                                        start_page=1, start_reason="Fuel is $4.56/gal.")))
+    assert res.start_reason == "" and res.coverage["start_here"] is False

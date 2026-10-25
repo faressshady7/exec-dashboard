@@ -33,10 +33,12 @@ from sqlalchemy.engine import Engine
 from dashboard.config import AISettings, PROJECT_ROOT, Settings, load_settings
 from dashboard.insights import Fact, Insight, build_candidates, narrative_facts, score
 
-PROMPT_VERSION = "v5"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
+PROMPT_VERSION = "v6"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
                         # v4 (20 Oct 2026): storytelling - brief as Situation/Complication/Resolution, chart captions, start here
                         # v5 (25 Oct 2026): action title + so-what caption per chart, chart-specific evidence,
                         #   every item number-checked on its own (one bad caption no longer discards the rest)
+                        # v6 (26 Oct 2026): numbers must come from THAT chart's / page's facts (cited fact ids),
+                        #   no 'reduces by -$X', quarters named, start-here points to another page
 
 SYSTEM = """You are a briefing analyst for airline executives.
 Rules you must follow:
@@ -88,6 +90,7 @@ class ChartStory(BaseModel):
     """v5: an action title (the takeaway, Knaflic 2015) + a so-what caption (comparison or implication)."""
     title: str = ""
     caption: str = ""
+    fact_ids: list[str] = []      # v6: the facts whose numbers the title and caption use (must be this chart's)
 
 
 class Captions(BaseModel):
@@ -121,7 +124,13 @@ CHART_EVIDENCE = {"jet_fuel": ("market_position", "exposure"), "share_price": ("
                   "sensitivity": ("exposure",), "fuel_exposure": ("exposure", "peer_gap"),
                   "episodes": ("scenario",), "kpi_matrix": ("trend", "change_point")}
 # room on the dashboard: (title, caption) in characters, from each chart panel's width
-CHART_ROOM = {"jet_fuel": (40, 90), "share_price": (70, 150), "valuation": (70, 150), "peer_bars": (45, 80),
+# which computed insights each page note may draw on (so a page talks about what is on that page)
+PAGE_EVIDENCE = {"page_briefing": ("market_position", "exposure", "peer_gap", "trend", "change_point", "news_event"),
+                 "page_peers": ("peer_gap", "valuation"), "page_risks": ("exposure", "market_position"),
+                 "page_whatif": ("scenario", "exposure"), "page_detail": ("trend", "change_point")}
+DOUBLE_NEG = re.compile(r"\b(reduc|cut|lower|decreas|fall|drop|declin|los)\w*\b[^.]{0,40}?\bby\s+(?:about\s+)?[-\u2212]\$?\d",
+                        re.IGNORECASE)
+CHART_ROOM = {"jet_fuel": (34, 70), "share_price": (70, 150), "valuation": (70, 150), "peer_bars": (45, 80),
               "sensitivity": (90, 190), "fuel_exposure": (55, 110), "episodes": (70, 150), "kpi_matrix": (110, 280)}
 
 
@@ -291,7 +300,7 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "") -> str
     for k, v in CHARTS.items():
         ev = [c.id for c in items if c.type in CHART_EVIDENCE[k] and c.facts]
         tmax, cmax = CHART_ROOM[k]
-        charts.append(f"- {k}: {v} | evidence: {', '.join(ev) or 'none'} | title <= {tmax} chars, caption <= {cmax} chars")
+        charts.append(f"- {k}: {v} | evidence insights: {', '.join(ev) or 'none'} | title <= {tmax} chars, caption <= {cmax} chars")
     fb = (f"\n\nSome items of your previous answer were rejected: {feedback}\n"
           f"Rewrite ONLY those items (copy the others unchanged), using only the display values listed.") if feedback else ""
     return (f"Write the story layer of {company}'s executive dashboard. An INSIGHT is a comparison that changes "
@@ -306,12 +315,17 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "") -> str
             f"e.g. 'United loses most if fuel rises: $379M a quarter';\n"
             f"   - caption: ONE sentence of so-what: the comparison or implication behind the title, with a different "
             f"number than the title where possible. Charts on the same page should build on each other, not repeat.\n"
+            f"   - fact_ids: the ids of every fact whose number the title or caption uses. Use ONLY facts from that chart's "
+            f"evidence insights: numbers from other insights describe other charts and will be rejected.\n"
             f"   Keep within the character limits. Leave title and caption empty if no evidence supports them.\n"
+            f"   When facts come from different quarters, name the quarter. Write losses as 'cuts X by $379M' or 'a $379M "
+            f"loss', never 'reduces by -$379M'.\n"
             + "\n".join(charts) + "\n\n"
             f"3. recommendations: 2-3 options the executives could CONSIDER. Each: a title (at most 8 words), a detail "
             f"of 1-2 sentences saying why now (with a number) and the trade-off, and the page (1-5) with the evidence. "
             f"Realistic airline actions only where the facts support them.\n\n"
-            f"4. start_page (1-5) and start_reason: the ONE page to open first today and why, one sentence with a number.\n\n"
+            f"4. start_page (2-5) and start_reason: the ONE other page to open next today and why, one sentence with a number "
+            f"(it is shown on page 1, so never page 1).\n\n"
             + "\n".join(blocks) + fb)
 
 
@@ -493,11 +507,18 @@ def template_narrative(items: list[Insight]) -> Round3:
 
 
 def _item_ok(text_: str, facts: list[Fact], limit: int = 0) -> tuple[bool, str]:
-    """One item (a page note, a title, a caption, an option) on its own: every number must be computed."""
+    """One item (a page note, a title, a caption, an option) on its own: every number must match one of
+    the facts it is allowed to use (its own chart or page), and no 'reduces by -$X' double negatives."""
     if limit and len(text_) > limit:
         return False, f"too long ({len(text_)} > {limit} characters)"
+    if DOUBLE_NEG.search(text_):
+        return False, "double negative (write 'cuts it by $X', not 'reduces it by -$X')"
     chk = check_numbers(text_, facts)
-    return chk.passed, ("" if chk.passed else "numbers not in the facts: " + ", ".join(chk.unmatched))
+    return chk.passed, ("" if chk.passed else "numbers not in this chart's or page's facts: " + ", ".join(chk.unmatched))
+
+
+def _evidence(items: list[Insight], types: tuple) -> list[Fact]:
+    return [f for c in items if c.type in types for f in c.facts]
 
 
 def narrate(s: Settings, items: list[Insight], llm: LLM) -> NarrativeResult:
@@ -524,18 +545,25 @@ def narrate(s: Settings, items: list[Insight], llm: LLM) -> NarrativeResult:
         for k in PAGES:
             if k not in ok:
                 note = getattr(r, k)
-                good, why = _item_ok(note, facts)
+                good, why = _item_ok(note, _evidence(items, PAGE_EVIDENCE[k]) or facts)
                 if good and note.strip():
                     ok[k] = note
                 else:
                     rejected.append(f"{k} ({why or 'empty'})")
         for k, st in r.captions.model_dump().items():
             tmax, cmax = CHART_ROOM[k]
+            ev = _evidence(items, CHART_EVIDENCE[k])
+            ev_ids = {f.id for f in ev}
+            outside = [i for i in st.get("fact_ids", []) if i not in ev_ids]
+            allowed = [f for f in ev if f.id in set(st.get("fact_ids", []))] or ev
             for part, limit in (("title", tmax), ("caption", cmax)):
                 key = f"{part}:{k}"
                 if key in ok or not st[part].strip():
                     continue
-                good, why = _item_ok(st[part], facts, limit)
+                if outside:
+                    rejected.append(f"{k} {part} (cites facts of another chart: {', '.join(outside[:3])})")
+                    continue
+                good, why = _item_ok(st[part], allowed, limit)
                 if good:
                     ok[key] = st[part]
                 else:
@@ -548,6 +576,8 @@ def narrate(s: Settings, items: list[Insight], llm: LLM) -> NarrativeResult:
                 rejected.append(f"option '{x.title[:40]}' ({why})")
         if start is None and r.start_reason.strip():
             good, why = _item_ok(r.start_reason, facts)
+            if good and r.start_page == 1:
+                good, why = False, "start_page must be another page (2-5)"
             start = (r.start_page, r.start_reason) if good else None
             if not good:
                 rejected.append(f"start_reason ({why})")

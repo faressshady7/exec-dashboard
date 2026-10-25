@@ -148,12 +148,13 @@ def peer_insights(pg: pd.DataFrame, focal: str, caveats: dict[str, str] | None =
         if unit == "%":
             rel = abs(f["gap_vs_peer_avg"]) / 10           # 10 percentage points = maximal
         good = (f["gap_vs_peer_avg"] > 0) == (f["better"] == "higher")
-        facts = [Fact(f"peer.{kpi}.focal", f"{focal} {f['label']}", f["value"], unit),
-                 Fact(f"peer.{kpi}.peer_avg", f"Peer average {f['label']}", f["peer_avg"], unit),
+        q = f["quarter_label"]
+        facts = [Fact(f"peer.{kpi}.focal", f"{focal} {f['label']} ({q})", f["value"], unit),
+                 Fact(f"peer.{kpi}.peer_avg", f"Peer average {f['label']} ({q})", f["peer_avg"], unit),
                  Fact(f"peer.{kpi}.gap", f"{focal} minus peer average", f["gap_vs_peer_avg"], gap_unit),
                  Fact(f"peer.{kpi}.rank", f"{focal} rank among {int(f['n_companies'])}", f["rank"], "count")]
         for _, p in g[g["ticker"] != focal].iterrows():
-            facts.append(Fact(f"peer.{kpi}.{p['ticker']}", f"{p['ticker']} {f['label']}", p["value"], unit))
+            facts.append(Fact(f"peer.{kpi}.{p['ticker']}", f"{p['ticker']} {f['label']} ({q})", p["value"], unit))
         out.append(Insight(
             id=f"peer:{kpi}", type="peer_gap",
             title=f"{f['label']}: {focal} ranks {int(f['rank'])} of {int(f['n_companies'])}",
