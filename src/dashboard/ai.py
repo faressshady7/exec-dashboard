@@ -110,7 +110,7 @@ class Captions(BaseModel):
 CHARTS = {"jet_fuel": "page 1: jet fuel price over 10 years",
           "share_price": "page 2: share prices of the three airlines, rebased to 100 three years ago",
           "valuation": "page 2: market value, net debt and price/earnings of the three airlines",
-          "peer_bars": "page 2: operating margin and fuel share of costs, same quarter, all three airlines",
+          "peer_bars": "page 2: operating margin of the three airlines, same quarter (a fuel-share chart sits next to it)",
           "sensitivity": "page 3: estimated effect on quarterly operating income of +10% jet fuel and +1 point rates",
           "fuel_exposure": "page 3: which airline loses most per quarter if jet fuel rises 10%",
           "episodes": "pages 3-4: past episodes (COVID oil crash, 2022 fuel spike, Fed hikes, last 12 months) replayed on today's quarter",
@@ -149,6 +149,7 @@ PAGES = {"page_briefing": "1 Executive Briefing: market drivers today and where 
 # =========================================================================== providers
 class LLM:
     name = "base"
+    fallback_reason: str = ""              # why the backup model was used (shown in the run annotation)
     deadline: Optional[float] = None       # epoch seconds; after it, no more model calls
 
     def json(self, prompt: str, schema: type[BaseModel]) -> BaseModel:  # pragma: no cover
@@ -208,6 +209,7 @@ class GeminiLLM(LLM):
         except Exception as e:                    # rate limit / overload / timeout -> free backup model
             busy = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out", "Timeout")
             if self.cfg.fallback_model and any(k.lower() in f"{type(e).__name__} {e}".lower() for k in busy):
+                self.fallback_reason = f"{type(e).__name__}: {str(e)[:90]}"
                 self.check_time()
                 self.name = self.cfg.fallback_model
                 return self._call(self.cfg.fallback_model, prompt, schema)
@@ -287,7 +289,8 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "") -> str
             f"sentence 2 is the tension (what is unusual, changing or at risk); sentence 3 says which chart on the page "
             f"to look at for it.\n{pages}\n\n"
             f"2. Chart stories. For EACH chart below, using its evidence insights first:\n"
-            f"   - title: the takeaway as a short statement with a number (an action title, not a label), "
+            f"   - title: the takeaway as a short statement with a number that names what the chart measures "
+            f"(an action title, not a label), "
             f"e.g. 'United loses most if fuel rises: $379M a quarter';\n"
             f"   - caption: ONE sentence of so-what: the comparison or implication behind the title, with a different "
             f"number than the title where possible. Charts on the same page should build on each other, not repeat.\n"
@@ -652,6 +655,7 @@ def main() -> None:
     llm.deadline = time.time() + base.ai.time_budget_s
     for t in tickers:
         print(f"\n{'=' * 20} {t} {'=' * 20}")
+        llm.fallback_reason = ""
         _brief_one(settings_for(base, t), llm, args.freeze, engine())
 
 
@@ -674,7 +678,7 @@ def _brief_one(s: Settings, llm: LLM, freeze: bool, eng) -> None:
     print(f"::notice title=AI {s.focal_company}::brief={'template' if r.fallback_used else 'AI'} ({r.model}) | "
           f"pages {cov.get('pages')} | titles {cov.get('titles')} | captions {cov.get('captions')} | "
           f"options {cov.get('options')} | start {'AI' if cov.get('start_here') else 'none'} | "
-          f"{r.latency_ms / 1000:.0f}s brief")
+          f"{r.latency_ms / 1000:.0f}s brief" + (f" | backup because {llm.fallback_reason}" if llm.fallback_reason else ""))
     args = argparse.Namespace(freeze=freeze)
 
     print(f"\nTOP {len(r.selected)} INSIGHTS (LEVA score = 0.5 significance + 0.3 relevance + 0.2 impact)")
