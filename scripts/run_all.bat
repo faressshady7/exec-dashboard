@@ -1,7 +1,7 @@
 @echo off
 REM Runs the whole pipeline in order: bronze, silver, gold, compute, ai. Stops at the first failure.
-cd /d "%~dp0"
-set PYTHONPATH=%~dp0src
+cd /d "%~dp0.."
+set PYTHONPATH=%~dp0..\src
 if not exist logs mkdir logs
 echo Checking libraries...
 .venv\Scripts\python.exe -m pip install -q -r requirements.txt --disable-pip-version-check

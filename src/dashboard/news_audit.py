@@ -87,7 +87,7 @@ def main() -> None:
     OUT.parent.mkdir(exist_ok=True)
     df.to_csv(OUT, index=False, encoding="utf-8-sig")       # utf-8-sig: opens cleanly in Excel
     print(f"\nWrote {len(df)} headlines to {OUT}")
-    print("Next: open it, put y or n in the 'relevant' column, save, then run:  run_news_audit.bat score")
+    print("Next: open it, put y or n in the 'relevant' column, save, then run:  scripts\\run_news_audit.bat score")
 
 
 if __name__ == "__main__":

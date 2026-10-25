@@ -311,7 +311,7 @@ ai:
 
 # Daily share prices for the Peer Benchmark page (indexed performance, market cap, valuation).
 # Source: Financial Modeling Prep (FMP) free plan - 250 calls/day (we use 3), ~5 years of daily history,
-# personal/non-commercial use. Key goes in .env as FMP_API_KEY (set_fmp_key.bat), never in this file.
+# personal/non-commercial use. Key goes in .env as FMP_API_KEY (scripts\set_fmp_key.bat), never in this file.
 # Shares outstanding come from the SEC filings' cover page (dei:EntityCommonStockSharesOutstanding).
 # Limitation: raw closing prices, not dividend-adjusted (Delta pays a small dividend; UAL and AAL do not).
 stocks:

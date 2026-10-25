@@ -1,7 +1,7 @@
 @echo off
 REM News filter audit. No argument: make docs\news_audit.csv. "score": score your y/n answers.
-cd /d "%~dp0"
-set PYTHONPATH=%~dp0src
+cd /d "%~dp0.."
+set PYTHONPATH=%~dp0..\src
 if not exist logs mkdir logs
 set ARG=
 if /i "%1"=="score" set ARG=--score

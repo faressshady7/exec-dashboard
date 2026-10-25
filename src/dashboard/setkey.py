@@ -1,6 +1,6 @@
 """Save the FMP API key into .env (typed hidden, never shown or printed), then test it with one call.
 
-Run:  set_fmp_key.bat     (or: python -m dashboard.setkey)
+Run:  scripts\\set_fmp_key.bat     (or: python -m dashboard.setkey)
 """
 from __future__ import annotations
 

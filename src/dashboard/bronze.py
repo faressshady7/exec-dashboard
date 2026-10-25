@@ -369,7 +369,7 @@ def _print(results: list[FetchResult], report: list[dict]) -> None:
     stale = sum(x["status"] == "STALE" for x in report)
     print(f"\n{len(results)} downloads · {failed} failed · {stale} stale")
     if not any(r.source == "prices" for r in results):
-        print("Share prices skipped: FMP_API_KEY is not set (run set_fmp_key.bat, or add the GitHub secret).")
+        print("Share prices skipped: FMP_API_KEY is not set (run scripts\\set_fmp_key.bat, or add the GitHub secret).")
 
 
 def main() -> None:

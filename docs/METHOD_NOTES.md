@@ -28,8 +28,8 @@ Raw articles are kept in bronze; silver *tags* each one (nothing is deleted, so 
    standards and a corrections policy; 2 = specialist trade/business press; 3 = other.
    Only tiers 1-2 reach the AI.
 
-Report the funnel from `run_news_audit.bat` (first measured: 400 -> 26 -> 19 -> 18 kept; 7 tier 2, 11 tier 3),
-and the **precision** from the manual audit (`run_news_audit_score.bat`, 50 headlines rated y/n).
+Report the funnel from `scripts\run_news_audit.bat` (first measured: 400 -> 26 -> 19 -> 18 kept; 7 tier 2, 11 tier 3),
+and the **precision** from the manual audit (`scripts\run_news_audit_score.bat`, 50 headlines rated y/n).
 > "Source tiers reflect the researcher's judgement against documented criteria; a manual audit of
 > N kept headlines found X% relevant (tier 2: Y%, tier 3: Z%)."
 

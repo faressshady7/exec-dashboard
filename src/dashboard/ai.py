@@ -168,7 +168,7 @@ class GeminiLLM(LLM):
         load_dotenv(PROJECT_ROOT / ".env")
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
-            raise SystemExit("No GEMINI_API_KEY in .env - run set_gemini_key.bat")
+            raise SystemExit("No GEMINI_API_KEY in .env - run scripts\\set_gemini_key.bat")
         self.client = genai.Client(api_key=key,
                                    http_options=types.HttpOptions(timeout=cfg.request_timeout_s * 1000))
         self.cfg = cfg
