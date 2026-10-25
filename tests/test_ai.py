@@ -169,7 +169,7 @@ def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
     terms = load_settings().ai.flag_terms
     assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
     assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
-    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v4"
+    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v5"
 
 
 
@@ -211,8 +211,12 @@ def test_page_notes_and_options_are_checked():
     assert good.check.passed and not good.fallback_used and good.recommendations[0]["page"] == 3
     assert set(good.pages) == {"page_briefing", "page_peers", "page_risks", "page_whatif", "page_detail"}
     bad = narrate(s, _narrative_items(), MockLLM(lambda p, schema: _round3("A rise costs $999M.")))
-    assert bad.fallback_used and "No AI recommendation" in bad.recommendations[0]["title"]
-    assert "$379M" in bad.pages["page_risks"]                    # template = the computed summary
+    # v5: only the failed option is dropped; the page notes (all correct) are kept as AI text
+    assert not bad.fallback_used and "No AI recommendation" in bad.recommendations[0]["title"]
+    assert bad.pages["page_risks"] == "A 10% rise costs about $379M." and bad.coverage["options"] == 0
+    allbad = narrate(s, _narrative_items(), MockLLM(lambda p, schema: dict(_round3("A rise costs $999M."),
+                     page_briefing="$881M", page_peers="$882M", page_risks="$883M", page_whatif="$884M", page_detail="$885M")))
+    assert allbad.fallback_used and "$379M" in allbad.pages["page_risks"]   # template = the computed summary
     from dashboard.ai import round3_prompt
     prompt = round3_prompt(_narrative_items(), "United Airlines")
     assert "CONSIDER" in prompt and "trade-off" in prompt and 'display: "-$379M"' in prompt
@@ -240,9 +244,12 @@ def test_captions_and_start_here_are_number_checked():
               captions={"jet_fuel": "Jet fuel is $4.56/gal today.", "fuel_exposure": "A 10% rise costs about $379M."})
     good = narrate(s, _narrative_items(), MockLLM(lambda p, schema: ok))
     assert not good.fallback_used and good.start_page == 3 and good.captions["jet_fuel"].startswith("Jet fuel")
-    bad = dict(ok, captions={"jet_fuel": "Jet fuel is $9.99/gal today."})        # invented number in a caption
+    bad = dict(ok, captions={"jet_fuel": "Jet fuel is $9.99/gal today.",                 # invented number
+                             "fuel_exposure": "A 10% rise costs about $379M."})
     res = narrate(s, _narrative_items(), MockLLM(lambda p, schema: bad))
-    assert res.fallback_used and res.captions == {} and res.start_reason == ""
+    # v5: only the bad caption is dropped (after one rewrite); the good caption and start-here stay
+    assert "jet_fuel" not in res.captions and res.captions["fuel_exposure"].startswith("A 10%")
+    assert res.start_reason and res.attempts == 2
     prompt = round3_prompt(_narrative_items(), "United Airlines")
     assert "start_page" in prompt and all(k in prompt for k in CHARTS)
 
@@ -276,3 +283,24 @@ def test_round1_failure_ranks_on_computed_parts_only():
 def test_timeouts_are_configured():
     s = load_settings()
     assert 10 <= s.ai.request_timeout_s <= 600 and s.ai.time_budget_s <= 1200
+
+
+# ---------------------------------------------------------------- v5 chart stories
+def test_chart_story_has_action_title_and_so_what_caption_each_checked_alone():
+    from dashboard.ai import CHART_ROOM, MockLLM, narrate, round3_prompt
+    s = load_settings()
+    seen = []
+
+    def reply(p, schema):
+        seen.append(p)
+        title = "United loses most if fuel rises: $379M a quarter" if len(seen) > 1 else "Fuel costs $999M"
+        return dict(_round3("Fuel is $4.56/gal; trade-off: none."), captions={
+            "fuel_exposure": {"title": title, "caption": "That is the cost of a 10% rise at $4.56/gal."},
+            "peer_bars": {"title": "x" * (CHART_ROOM["peer_bars"][0] + 1), "caption": ""}})
+    res = narrate(s, _narrative_items(), MockLLM(reply))
+    assert res.titles["fuel_exposure"].startswith("United loses most")      # fixed in the targeted rewrite
+    assert "fuel_exposure title" in seen[1] and "Rewrite ONLY those items" in seen[1]
+    assert "peer_bars" not in res.titles                                     # too long for its panel: dropped
+    assert res.coverage["titles"] == "1/8" and res.coverage["captions"] == "1/8"
+    prompt = round3_prompt(_narrative_items(), "United Airlines")
+    assert "evidence: exp" in prompt and "action title" in prompt and "so-what" in prompt

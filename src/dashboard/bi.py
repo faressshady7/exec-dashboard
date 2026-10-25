@@ -134,7 +134,11 @@ VIEWS: dict[str, str] = {
                NULLIF(captions->>'jet_fuel', '') AS cap_jet_fuel, NULLIF(captions->>'share_price', '') AS cap_share_price,
                NULLIF(captions->>'valuation', '') AS cap_valuation, NULLIF(captions->>'peer_bars', '') AS cap_peer_bars,
                NULLIF(captions->>'sensitivity', '') AS cap_sensitivity, NULLIF(captions->>'fuel_exposure', '') AS cap_fuel_exposure,
-               NULLIF(captions->>'episodes', '') AS cap_episodes, NULLIF(captions->>'kpi_matrix', '') AS cap_kpi_matrix
+               NULLIF(captions->>'episodes', '') AS cap_episodes, NULLIF(captions->>'kpi_matrix', '') AS cap_kpi_matrix,
+               NULLIF(chart_titles->>'jet_fuel', '') AS ttl_jet_fuel, NULLIF(chart_titles->>'share_price', '') AS ttl_share_price,
+               NULLIF(chart_titles->>'valuation', '') AS ttl_valuation, NULLIF(chart_titles->>'peer_bars', '') AS ttl_peer_bars,
+               NULLIF(chart_titles->>'sensitivity', '') AS ttl_sensitivity, NULLIF(chart_titles->>'fuel_exposure', '') AS ttl_fuel_exposure,
+               NULLIF(chart_titles->>'episodes', '') AS ttl_episodes, NULLIF(chart_titles->>'kpi_matrix', '') AS ttl_kpi_matrix
         FROM ai.brief ORDER BY company, frozen DESC, created_at DESC""",
 
     # AI options to consider, one row each (from the same brief as above)

@@ -26,15 +26,17 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 import requests
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from dashboard.config import AISettings, PROJECT_ROOT, Settings, load_settings
 from dashboard.insights import Fact, Insight, build_candidates, narrative_facts, score
 
-PROMPT_VERSION = "v4"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
+PROMPT_VERSION = "v5"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
                         # v4 (20 Oct 2026): storytelling - brief as Situation/Complication/Resolution, chart captions, start here
+                        # v5 (25 Oct 2026): action title + so-what caption per chart, chart-specific evidence,
+                        #   every item number-checked on its own (one bad caption no longer discards the rest)
 
 SYSTEM = """You are a briefing analyst for airline executives.
 Rules you must follow:
@@ -82,16 +84,27 @@ class Recommendation(BaseModel):
     page: int = Field(ge=1, le=5)
 
 
+class ChartStory(BaseModel):
+    """v5: an action title (the takeaway, Knaflic 2015) + a so-what caption (comparison or implication)."""
+    title: str = ""
+    caption: str = ""
+
+
 class Captions(BaseModel):
-    """v4: one sentence per chart saying what it shows TODAY (LEVA-style annotations)."""
-    jet_fuel: str = ""
-    share_price: str = ""
-    valuation: str = ""
-    peer_bars: str = ""
-    sensitivity: str = ""
-    fuel_exposure: str = ""
-    episodes: str = ""
-    kpi_matrix: str = ""
+    """v4: one caption per chart (LEVA-style annotations). v5: each chart gets a title + caption."""
+    jet_fuel: ChartStory = Field(default_factory=ChartStory)
+    share_price: ChartStory = Field(default_factory=ChartStory)
+    valuation: ChartStory = Field(default_factory=ChartStory)
+    peer_bars: ChartStory = Field(default_factory=ChartStory)
+    sensitivity: ChartStory = Field(default_factory=ChartStory)
+    fuel_exposure: ChartStory = Field(default_factory=ChartStory)
+    episodes: ChartStory = Field(default_factory=ChartStory)
+    kpi_matrix: ChartStory = Field(default_factory=ChartStory)
+
+    @field_validator("*", mode="before")
+    @classmethod
+    def _plain_text_is_a_caption(cls, v):             # v4 replies (a plain sentence) still accepted
+        return {"caption": v} if isinstance(v, str) else v
 
 
 CHARTS = {"jet_fuel": "page 1: jet fuel price over 10 years",
@@ -102,6 +115,14 @@ CHARTS = {"jet_fuel": "page 1: jet fuel price over 10 years",
           "fuel_exposure": "page 3: which airline loses most per quarter if jet fuel rises 10%",
           "episodes": "pages 3-4: past episodes (COVID oil crash, 2022 fuel spike, Fed hikes, last 12 months) replayed on today's quarter",
           "kpi_matrix": "page 5: every KPI quarter by quarter, unusual quarters highlighted"}
+# which computed insights are evidence for which chart (so the caption talks about THAT chart)
+CHART_EVIDENCE = {"jet_fuel": ("market_position", "exposure"), "share_price": ("valuation",),
+                  "valuation": ("valuation", "peer_gap"), "peer_bars": ("peer_gap",),
+                  "sensitivity": ("exposure",), "fuel_exposure": ("exposure", "peer_gap"),
+                  "episodes": ("scenario",), "kpi_matrix": ("trend", "change_point")}
+# room on the dashboard: (title, caption) in characters, from each chart panel's width
+CHART_ROOM = {"jet_fuel": (40, 90), "share_price": (70, 150), "valuation": (70, 150), "peer_bars": (45, 80),
+              "sensitivity": (90, 190), "fuel_exposure": (55, 110), "episodes": (70, 150), "kpi_matrix": (110, 280)}
 
 
 class Round3(BaseModel):
@@ -235,11 +256,14 @@ def round2_prompt(top: list[Insight], company: str, feedback: str = "") -> str:
         facts = "\n".join(f'    - id: {f.id} | {f.label} | display: "{f.display()}"' for f in c.facts) or "    (no numbers)"
         blocks.append(f"- insight: {c.title}\n  summary: {c.summary}\n  facts:\n{facts}")
     fb = f"\n\nYour previous draft was rejected: {feedback} Rewrite it using only the display values listed." if feedback else ""
-    return (f"Write a briefing for {company}'s executives from these insights, told as a short story.\n"
-            f"- headline: at most 12 words.\n"
+    return (f"Write a briefing for {company}'s executives from these insights, told as a short story. "
+            f"Lead with comparisons (vs the peer airlines, vs the company's own history, or vs its quarterly profit), "
+            f"not with bare values.\n"
+            f"- headline: at most 12 words, the single takeaway with a number.\n"
             f"- situation: ONE sentence - what is happening now (the most important fact first).\n"
             f"- complication: ONE sentence - why it matters for {company} (a cost, a risk or a gap vs peers), with a number.\n"
-            f"- resolution: ONE sentence - what the executives could look at or consider next (never investment advice).\n"
+            f"- resolution: ONE sentence - what the executives could look at or consider next, naming the dashboard page "
+            f"(never investment advice).\n"
             f"- fact_ids_used: ids of every fact whose number you cite.\n\n" + "\n".join(blocks) + fb)
 
 
@@ -247,19 +271,32 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "") -> str
     blocks = []
     for c in items:
         facts = "\n".join(f'    - id: {f.id} | {f.label} | display: "{f.display()}"' for f in c.facts) or "    (no numbers)"
-        blocks.append(f"- [{c.type}] {c.title}\n  summary: {c.summary}\n  facts:\n{facts}")
+        blocks.append(f"- insight {c.id} [{c.type}] {c.title}\n  summary: {c.summary}\n  facts:\n{facts}")
     pages = "\n".join(f"- {k}: {v}" for k, v in PAGES.items())
-    charts = "\n".join(f"- {k}: {v}" for k, v in CHARTS.items())
-    fb = f"\n\nYour previous answer was rejected: {feedback} Rewrite it using only the display values listed." if feedback else ""
-    return (f"Write the page notes for {company}'s executive dashboard.\n"
-            f"For EACH page below: 2-3 sentences, plain English, most important point first, at least one number.\n{pages}\n"
-            f"Then recommendations: 2-3 options the executives could CONSIDER. Each: a title (at most 8 words), "
-            f"a detail of 1-2 sentences saying why now (with a number from the facts) and the trade-off, and the page (1-5) "
-            f"where the evidence is. Use realistic airline actions only where the facts support them.\n"
-            f"Then start_page (1-5) and start_reason: the ONE page an executive should open first today and why, "
-            f"in one sentence with a number.\n"
-            f"Then captions: ONE sentence (at most 25 words) per chart saying what it shows TODAY for {company}, "
-            f"using a number from the facts. Leave a caption empty if no fact supports it.\n{charts}\n\n"
+    charts = []
+    for k, v in CHARTS.items():
+        ev = [c.id for c in items if c.type in CHART_EVIDENCE[k] and c.facts]
+        tmax, cmax = CHART_ROOM[k]
+        charts.append(f"- {k}: {v} | evidence: {', '.join(ev) or 'none'} | title <= {tmax} chars, caption <= {cmax} chars")
+    fb = (f"\n\nSome items of your previous answer were rejected: {feedback}\n"
+          f"Rewrite ONLY those items (copy the others unchanged), using only the display values listed.") if feedback else ""
+    return (f"Write the story layer of {company}'s executive dashboard. An INSIGHT is a comparison that changes "
+            f"what an executive would watch or do: vs the two peer airlines, vs the company's own history, or vs the "
+            f"size of its quarterly profit. Never just restate a value or describe the chart (no 'the chart shows').\n\n"
+            f"1. Page notes. For EACH page: 2-3 sentences. Sentence 1 answers the page's question with a number; "
+            f"sentence 2 is the tension (what is unusual, changing or at risk); sentence 3 says which chart on the page "
+            f"to look at for it.\n{pages}\n\n"
+            f"2. Chart stories. For EACH chart below, using its evidence insights first:\n"
+            f"   - title: the takeaway as a short statement with a number (an action title, not a label), "
+            f"e.g. 'United loses most if fuel rises: $379M a quarter';\n"
+            f"   - caption: ONE sentence of so-what: the comparison or implication behind the title, with a different "
+            f"number than the title where possible. Charts on the same page should build on each other, not repeat.\n"
+            f"   Keep within the character limits. Leave title and caption empty if no evidence supports them.\n"
+            + "\n".join(charts) + "\n\n"
+            f"3. recommendations: 2-3 options the executives could CONSIDER. Each: a title (at most 8 words), a detail "
+            f"of 1-2 sentences saying why now (with a number) and the trade-off, and the page (1-5) with the evidence. "
+            f"Realistic airline actions only where the facts support them.\n\n"
+            f"4. start_page (1-5) and start_reason: the ONE page to open first today and why, one sentence with a number.\n\n"
             + "\n".join(blocks) + fb)
 
 
@@ -420,13 +457,15 @@ class NarrativeResult:
     attempts: int
     start_page: int = 1
     start_reason: str = ""
-    captions: dict = field(default_factory=dict)
+    captions: dict = field(default_factory=dict)       # chart -> so-what caption
+    titles: dict = field(default_factory=dict)         # chart -> action title
+    coverage: dict = field(default_factory=dict)       # what passed the check: {"pages": "5/5", ...}
 
 
 def _narrative_text(r: Round3) -> str:
+    caps = [x for st in r.captions.model_dump().values() for x in (st["title"], st["caption"])]
     return " ".join([r.page_briefing, r.page_peers, r.page_risks, r.page_whatif, r.page_detail, r.start_reason]
-                    + [f"{x.title} {x.detail}" for x in r.recommendations]
-                    + list(r.captions.model_dump().values()))
+                    + [f"{x.title} {x.detail}" for x in r.recommendations] + caps)
 
 
 def template_narrative(items: list[Insight]) -> Round3:
@@ -438,27 +477,82 @@ def template_narrative(items: list[Insight]) -> Round3:
                                                   detail="The AI text did not pass the number check, so no options are shown.", page=1)])
 
 
+def _item_ok(text_: str, facts: list[Fact], limit: int = 0) -> tuple[bool, str]:
+    """One item (a page note, a title, a caption, an option) on its own: every number must be computed."""
+    if limit and len(text_) > limit:
+        return False, f"too long ({len(text_)} > {limit} characters)"
+    chk = check_numbers(text_, facts)
+    return chk.passed, ("" if chk.passed else "numbers not in the facts: " + ", ".join(chk.unmatched))
+
+
 def narrate(s: Settings, items: list[Insight], llm: LLM) -> NarrativeResult:
-    """Round 3: page briefs + options to consider, checked like the brief (one rewrite, then a template)."""
+    """Round 3 (v5): page notes, chart stories, options and 'start here'. Each item is checked ON ITS OWN:
+    items that pass are kept, failed ones get one targeted rewrite, and whatever still fails falls back
+    (page note -> computed summary, chart -> its fixed subtitle, options -> none). Never unchecked text."""
     company = s.company(s.focal_company).name
     facts = [f for c in items for f in c.facts]
-    feedback = ""
+    tmpl = template_narrative(items)
+    ok: dict[str, str] = {}                      # accepted item key -> text
+    recs: list[dict] = []
+    start: Optional[tuple[int, str]] = None
+    feedback, used = "", 0
     for i in range(s.ai.max_retries + 1):
         try:
             r = llm.json(round3_prompt(items, company, feedback), Round3)
-        except Exception as e:
-            feedback = "your previous answer was not valid JSON. Reply with the JSON object only."
+        except Exception as e:                   # invalid JSON, timeout, budget used up
+            feedback = feedback or "your previous answer was not valid JSON. Reply with the JSON object only."
+            if isinstance(e, TimeoutError):
+                break
             continue
-        chk = check_numbers(_narrative_text(r), facts)
-        if chk.passed:
-            return NarrativeResult({k: getattr(r, k) for k in PAGES}, [x.model_dump() for x in r.recommendations],
-                                   chk, check_wording(_narrative_text(r), s.ai.flag_terms), False, i + 1,
-                                   r.start_page, r.start_reason, r.captions.model_dump())
-        feedback = f"these numbers are not in the facts: {', '.join(chk.unmatched)}."
-    t = template_narrative(items)
-    return NarrativeResult({k: getattr(t, k) for k in PAGES}, [x.model_dump() for x in t.recommendations],
-                           check_numbers(_narrative_text(t), facts), check_wording(_narrative_text(t), s.ai.flag_terms),
-                           True, s.ai.max_retries + 1)
+        used = i + 1
+        rejected = []
+        for k in PAGES:
+            if k not in ok:
+                note = getattr(r, k)
+                good, why = _item_ok(note, facts)
+                if good and note.strip():
+                    ok[k] = note
+                else:
+                    rejected.append(f"{k} ({why or 'empty'})")
+        for k, st in r.captions.model_dump().items():
+            tmax, cmax = CHART_ROOM[k]
+            for part, limit in (("title", tmax), ("caption", cmax)):
+                key = f"{part}:{k}"
+                if key in ok or not st[part].strip():
+                    continue
+                good, why = _item_ok(st[part], facts, limit)
+                if good:
+                    ok[key] = st[part]
+                else:
+                    rejected.append(f"{k} {part} ({why})")
+        for x in r.recommendations:
+            good, why = _item_ok(f"{x.title} {x.detail}", facts)
+            if good and len(recs) < 3 and x.title not in {y["title"] for y in recs}:
+                recs.append(x.model_dump())
+            elif not good:
+                rejected.append(f"option '{x.title[:40]}' ({why})")
+        if start is None and r.start_reason.strip():
+            good, why = _item_ok(r.start_reason, facts)
+            start = (r.start_page, r.start_reason) if good else None
+            if not good:
+                rejected.append(f"start_reason ({why})")
+        if not rejected:
+            break
+        feedback = "; ".join(rejected)
+    pages = {k: ok.get(k, getattr(tmpl, k)) for k in PAGES}
+    titles = {k: ok[f"title:{k}"] for k in CHARTS if f"title:{k}" in ok}
+    captions = {k: ok[f"caption:{k}"] for k in CHARTS if f"caption:{k}" in ok}
+    if not recs:
+        recs = [x.model_dump() for x in tmpl.recommendations]
+    n_pages = sum(k in ok for k in PAGES)
+    ai_recs = 0 if recs and recs[0]["title"].startswith("No AI") else len(recs)
+    coverage = {"pages": f"{n_pages}/{len(PAGES)}", "titles": f"{len(titles)}/{len(CHARTS)}",
+                "captions": f"{len(captions)}/{len(CHARTS)}", "options": ai_recs, "start_here": start is not None}
+    kept = " ".join(list(pages.values()) + list(titles.values()) + list(captions.values())
+                    + [f"{x['title']} {x['detail']}" for x in recs] + ([start[1]] if start else []))
+    return NarrativeResult(pages, recs, check_numbers(kept, facts), check_wording(kept, s.ai.flag_terms),
+                           n_pages + len(titles) + len(captions) + ai_recs == 0, used,
+                           start[0] if start else 1, start[1] if start else "", captions, titles, coverage)
 
 
 DDL = """
@@ -500,7 +594,9 @@ ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS narrative_fallback BOOLEAN;
 ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS brief_parts JSONB;
 ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS start_page SMALLINT;
 ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS start_reason TEXT;
-ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS captions JSONB
+ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS captions JSONB;
+ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS chart_titles JSONB;
+ALTER TABLE ai.brief ADD COLUMN IF NOT EXISTS narrative_coverage JSONB
 """
 
 
@@ -523,10 +619,11 @@ def store(eng: Engine, s: Settings, r: BriefResult, freeze: bool = False, n: "Na
         if n is not None:
             con.execute(text("""UPDATE ai.brief SET pages = :p, recommendations = :r, narrative_passed = :ok,
                                 narrative_flags = :f, narrative_fallback = :fb, start_page = :sp, start_reason = :sr,
-                                captions = :cap WHERE brief_id = :b"""),
+                                captions = :cap, chart_titles = :ttl, narrative_coverage = :cov WHERE brief_id = :b"""),
                         {"p": json.dumps(n.pages), "r": json.dumps(n.recommendations), "ok": n.check.passed,
                          "f": json.dumps(n.flags), "fb": n.fallback_used, "b": bid, "sp": n.start_page,
-                         "sr": n.start_reason or None, "cap": json.dumps(n.captions)})
+                         "sr": n.start_reason or None, "cap": json.dumps(n.captions),
+                         "ttl": json.dumps(n.titles), "cov": json.dumps(n.coverage)})
         for a in r.attempts:
             con.execute(text("""INSERT INTO ai.attempt (brief_id, attempt_no, model, headline, brief, passed, unmatched, wording_flags)
                                 VALUES (:b, :n, :m, :h, :t, :p, :u, :wf)"""),
@@ -569,9 +666,15 @@ def _brief_one(s: Settings, llm: LLM, freeze: bool, eng) -> None:
     for x in n.recommendations:
         print(f"  - [{x['page']}] {x['title']}: {x['detail']}")
     print(f"START HERE: page {n.start_page} - {n.start_reason or '(none)'}")
-    for k, v in (n.captions or {}).items():
-        if v:
-            print(f"  caption {k}: {v}")
+    for k in CHARTS:
+        if n.titles.get(k) or n.captions.get(k):
+            print(f"  chart {k}: {n.titles.get(k, '(fixed title)')} | {n.captions.get(k, '(fixed subtitle)')}")
+    # one line per company that GitHub shows as an annotation on the run (readable without the logs)
+    cov = n.coverage
+    print(f"::notice title=AI {s.focal_company}::brief={'template' if r.fallback_used else 'AI'} ({r.model}) | "
+          f"pages {cov.get('pages')} | titles {cov.get('titles')} | captions {cov.get('captions')} | "
+          f"options {cov.get('options')} | start {'AI' if cov.get('start_here') else 'none'} | "
+          f"{r.latency_ms / 1000:.0f}s brief")
     args = argparse.Namespace(freeze=freeze)
 
     print(f"\nTOP {len(r.selected)} INSIGHTS (LEVA score = 0.5 significance + 0.3 relevance + 0.2 impact)")
