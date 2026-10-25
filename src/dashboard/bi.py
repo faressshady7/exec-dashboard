@@ -181,8 +181,11 @@ VIEWS: dict[str, str] = {
         FROM gold.attention a""",
 
     # Header: "Data as of ..."
+    # latest observation per market series + when the pipeline last loaded data (the header's "Updated" date)
     "freshness": """
-        SELECT v.label, v.scope, v.frequency, max(d.full_date) AS latest_date
+        SELECT v.label, v.scope, v.frequency, max(d.full_date) AS latest_date,
+               (SELECT max(run_at)::date FROM silver.load_log) AS updated_on,
+               (SELECT max(d2.full_date) FROM gold.fact_stock s JOIN gold.dim_date d2 USING (date_key)) AS prices_to
         FROM gold.fact_market f JOIN gold.dim_variable v USING (variable_key) JOIN gold.dim_date d USING (date_key)
         GROUP BY v.label, v.scope, v.frequency""",
 }
