@@ -202,18 +202,30 @@ class GeminiLLM(LLM):
         raise ValueError(f"model returned invalid JSON twice: {str(last_err)[:120]}")
 
     def json(self, prompt, schema):
+        """Main model first. Round 1 (relevance scores) goes straight to the backup model to save the main
+        model's free daily quota for the writing rounds. A per-minute 429 that asks to retry within 60 s
+        is waited out once; otherwise rate limit / overload / timeout -> backup model."""
         self.check_time()
-        try:
-            self.name = self.cfg.model
-            return self._call(self.cfg.model, prompt, schema)
-        except Exception as e:                    # rate limit / overload / timeout -> free backup model
-            busy = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out", "Timeout")
-            if self.cfg.fallback_model and any(k.lower() in f"{type(e).__name__} {e}".lower() for k in busy):
-                self.fallback_reason = f"{type(e).__name__}: {str(e)[:90]}"
-                self.check_time()
-                self.name = self.cfg.fallback_model
-                return self._call(self.cfg.fallback_model, prompt, schema)
-            raise
+        model = self.cfg.fallback_model if (schema is Round1 and self.cfg.fallback_model) else self.cfg.model
+        busy = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out", "Timeout")
+        for attempt in range(2):
+            try:
+                self.name = model
+                return self._call(model, prompt, schema)
+            except Exception as e:
+                msg = f"{type(e).__name__} {e}"
+                wait = re.search(r"retry(?:Delay)?['\"]?:?\s*['\"]?(\d+(?:\.\d+)?)s", msg, re.IGNORECASE)
+                if attempt == 0 and "429" in msg and wait and float(wait.group(1)) <= 60 and "PerDay" not in msg:
+                    self.check_time()
+                    time.sleep(float(wait.group(1)) + 1)      # per-minute limit: wait once, then retry
+                    continue
+                if model != self.cfg.fallback_model and self.cfg.fallback_model and any(k.lower() in msg.lower() for k in busy):
+                    self.fallback_reason = f"{type(e).__name__}: {str(e)[:90]}"
+                    self.check_time()
+                    self.name = self.cfg.fallback_model
+                    return self._call(self.cfg.fallback_model, prompt, schema)
+                raise
+        raise RuntimeError("unreachable")
 
 
 class OllamaLLM(LLM):
