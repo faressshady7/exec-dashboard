@@ -128,20 +128,28 @@ PAGES = {"page_briefing": "1 Executive Briefing: market drivers today and where 
 # =========================================================================== providers
 class LLM:
     name = "base"
+    deadline: Optional[float] = None       # epoch seconds; after it, no more model calls
 
     def json(self, prompt: str, schema: type[BaseModel]) -> BaseModel:  # pragma: no cover
         raise NotImplementedError
+
+    def check_time(self) -> None:
+        if self.deadline is not None and time.time() > self.deadline:
+            raise TimeoutError("AI time budget used up - using the computed template instead")
 
 
 class GeminiLLM(LLM):
     def __init__(self, cfg: AISettings):
         from dotenv import load_dotenv
         from google import genai
+        from google.genai import types
         load_dotenv(PROJECT_ROOT / ".env")
         key = os.environ.get("GEMINI_API_KEY")
         if not key:
             raise SystemExit("No GEMINI_API_KEY in .env - run set_gemini_key.bat")
-        self.client, self.cfg = genai.Client(api_key=key), cfg
+        self.client = genai.Client(api_key=key,
+                                   http_options=types.HttpOptions(timeout=cfg.request_timeout_s * 1000))
+        self.cfg = cfg
         self.name = cfg.model
 
     def _call(self, model: str, prompt: str, schema: type[BaseModel]) -> BaseModel:
@@ -172,11 +180,14 @@ class GeminiLLM(LLM):
         raise ValueError(f"model returned invalid JSON twice: {str(last_err)[:120]}")
 
     def json(self, prompt, schema):
+        self.check_time()
         try:
             self.name = self.cfg.model
             return self._call(self.cfg.model, prompt, schema)
-        except Exception as e:                    # rate limit / overload -> free backup model
-            if self.cfg.fallback_model and any(k in str(e) for k in ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE")):
+        except Exception as e:                    # rate limit / overload / timeout -> free backup model
+            busy = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out", "Timeout")
+            if self.cfg.fallback_model and any(k.lower() in f"{type(e).__name__} {e}".lower() for k in busy):
+                self.check_time()
                 self.name = self.cfg.fallback_model
                 return self._call(self.cfg.fallback_model, prompt, schema)
             raise
@@ -201,6 +212,7 @@ class MockLLM(LLM):
         self.reply, self.name = reply, "mock"
 
     def json(self, prompt, schema):
+        self.check_time()
         return schema.model_validate(self.reply(prompt, schema))
 
 
@@ -353,9 +365,13 @@ def generate(s: Settings, cands: list[Insight], llm: LLM) -> BriefResult:
     company = s.company(s.focal_company).name
     # ---- round 1: relevance -> LEVA score -> top k
     t1 = time.time()
-    r1 = llm.json(round1_prompt(cands, company), Round1)
+    try:
+        r1 = llm.json(round1_prompt(cands, company), Round1)
+        rel = {r.id: r.relevance for r in r1.ranking}
+    except Exception as e:                          # no relevance from the model: rank on computed parts only
+        print(f"  round 1 skipped ({str(e)[:80]}): ranking on significance and impact only")
+        rel = {}
     timings = {"round1_s": round(time.time() - t1, 1)}
-    rel = {r.id: r.relevance for r in r1.ranking}
     for c in cands:
         c.relevance = rel.get(c.id, 0.0)
         c.score = score(c, s.ai.weights)
@@ -536,6 +552,7 @@ def main() -> None:
     base = load_settings()
     tickers = [args.only] if args.only else [c.ticker for c in base.in_scope]
     llm = make_llm(base.ai)
+    llm.deadline = time.time() + base.ai.time_budget_s
     for t in tickers:
         print(f"\n{'=' * 20} {t} {'=' * 20}")
         _brief_one(settings_for(base, t), llm, args.freeze, engine())

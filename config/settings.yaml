@@ -299,6 +299,8 @@ ai:
   candidates: 12                   # insights shown to the LLM in round 1
   pick: 3                          # insights in the final brief
   weights: {significance: 0.5, relevance: 0.3, impact: 0.2}   # LEVA scoring
+  request_timeout_s: 120          # one model call is abandoned after this (then the backup model)
+  time_budget_s: 900               # whole AI step; after it the computed template is used, so the run ends before GitHub's 30-min limit
   max_retries: 1                   # rewrite once if the number checker fails, then use template
   # Wording check (flags only, never blocks): numbers can be right while the claim is not.
   # A flagged brief counts as a POSSIBLE claim error; the study reports numeric and claim errors separately.

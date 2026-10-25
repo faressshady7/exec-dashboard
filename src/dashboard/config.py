@@ -121,6 +121,11 @@ class AISettings(BaseModel):
     weights: dict[Literal["significance", "relevance", "impact"], float] = {
         "significance": 0.5, "relevance": 0.3, "impact": 0.2}
     max_retries: int = Field(default=1, ge=0, le=3)
+    # A single model call is abandoned after request_timeout_s (then the backup model is tried);
+    # once time_budget_s has passed for the whole AI step, the remaining text falls back to the
+    # computed template, so the daily run always finishes inside the 30-minute GitHub job limit.
+    request_timeout_s: int = Field(default=120, ge=10, le=600)
+    time_budget_s: int = Field(default=900, ge=60, le=3600)
     flag_terms: dict[str, list[str]] = {}      # wording check: category -> risky words/phrases
 
     @model_validator(mode="after")

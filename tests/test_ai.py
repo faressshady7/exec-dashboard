@@ -245,3 +245,34 @@ def test_captions_and_start_here_are_number_checked():
     assert res.fallback_used and res.captions == {} and res.start_reason == ""
     prompt = round3_prompt(_narrative_items(), "United Airlines")
     assert "start_page" in prompt and all(k in prompt for k in CHARTS)
+
+
+# ---------------------------------------------------------------- time limits (daily run must finish)
+def test_used_up_time_budget_gives_template_without_calling_the_model():
+    import time
+    from dashboard.ai import narrate
+    s = load_settings()
+    calls = []
+    llm = MockLLM(lambda p, schema: calls.append(schema) or {})
+    llm.deadline = time.time() - 1                                   # budget already spent
+    res = generate(s, [insight(i) for i in range(1, 4)], llm)
+    assert res.fallback_used and res.check.passed and not calls      # round 1 skipped, round 2 template
+    n = narrate(s, _narrative_items(), llm)
+    assert n.fallback_used and not calls
+
+
+def test_round1_failure_ranks_on_computed_parts_only():
+    s = load_settings()
+    cands = [insight(i) for i in range(1, 4)]
+
+    def reply(p, schema):
+        if schema is Round1:
+            raise TimeoutError("timed out")
+        return {"headline": "H", "brief": "Summary.", "fact_ids_used": []}
+    res = generate(s, cands, MockLLM(reply))
+    assert all(c.relevance == 0.0 for c in res.candidates) and not res.fallback_used
+
+
+def test_timeouts_are_configured():
+    s = load_settings()
+    assert 10 <= s.ai.request_timeout_s <= 600 and s.ai.time_budget_s <= 1200
