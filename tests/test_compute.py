@@ -227,7 +227,7 @@ def test_driver_parts_add_up_and_name_the_main_driver():
     main = m[m["rank"] == 1].iloc[0]
     assert main["driver"] == "fuel" and main["strength"] == "mostly" and main["change"] < 0
     s = driver_sentence(m)
-    assert s.startswith("Operating margin fell") and "mostly because of fuel cost" in s
+    assert s.startswith("Operating margin fell") and "mostly because fuel cost took" in s
 
 
 def test_flat_kpi_is_reported_as_unchanged_not_explained():

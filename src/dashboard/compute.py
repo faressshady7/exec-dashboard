@@ -257,6 +257,12 @@ def drivers(fin: pd.DataFrame) -> pd.DataFrame:
             except (KeyError, ZeroDivisionError):
                 continue
             if any(pd.isna(v) for v in [vn, vb, *parts.values()]):
+                need = {"operating_margin_pct": ["revenue", "fuel_expense", "operating_expenses", "operating_income"],
+                        "operating_income": ["revenue", "fuel_expense", "operating_expenses", "operating_income"],
+                        "free_cash_flow": ["operating_cash_flow", "capex"], "net_debt": ["total_debt", "liquidity"]}[kpi]
+                miss = [f"{c} {q}" for c in need for r, q in ((now, now["quarter_label"]), (before, before["quarter_label"]))
+                        if c not in r or pd.isna(r[c])]
+                print(f"::notice title=Why {t} {kpi}::not explained - missing {', '.join(miss)}")
                 continue
             change = vn - vb
             ranked = sorted(parts.items(), key=lambda kv: -abs(kv[1]))
@@ -271,8 +277,21 @@ def drivers(fin: pd.DataFrame) -> pd.DataFrame:
                              "compared_with": before["quarter_label"], "value_now": vn, "value_before": vb,
                              "change": change, "unit": unit, "driver": d, "driver_label": DRIVER_LABELS[d],
                              "contribution": v, "rank": rank, "is_main": rank == 1 and strength in ("mostly", "partly"),
-                             "strength": strength, "noise": abs(v) < SMALL[unit]})
+                             "strength": strength, "noise": abs(v) < max(SMALL[unit], 0.05 * abs(change))})
     return pd.DataFrame(rows)
+
+
+# how a driver moved, in plain words: contribution x sign = the driver's own change
+_COST_LIKE = {"fuel", "other_costs", "capex", "liquidity"}     # these lower the KPI when they rise (liquidity: net debt)
+
+
+def _movement(d: str, contribution: float, unit: str, fmt) -> str:
+    own = -contribution if d in _COST_LIKE else contribution
+    if unit == "pp":                                   # margin: a cost taking share of revenue
+        return f"{DRIVER_LABELS[d]} {'took' if contribution < 0 else 'added'} {fmt(contribution)}"
+    if d == "special_items":
+        return f"{DRIVER_LABELS[d]} {'added' if contribution >= 0 else 'took off'} {fmt(contribution)}"
+    return f"{DRIVER_LABELS[d]} {'rose' if own >= 0 else 'fell'} {fmt(own)}"
 
 
 def driver_sentence(g: pd.DataFrame) -> str:
@@ -281,21 +300,25 @@ def driver_sentence(g: pd.DataFrame) -> str:
     up = r["change"] >= 0
     unit = r["unit"]
     fmt = (lambda v: f"{abs(v):.1f} pp") if unit == "pp" else (lambda v: _fmt(abs(v), "USD"))
-    head = f"{r['label']} {'rose' if up else 'fell'} {fmt(r['change'])} ({r['quarter_label']} vs {r['compared_with']})"
-    main = g[g["rank"] == 1].iloc[0]
+    when = f"({r['quarter_label']} vs {r['compared_with']})"
     if r["strength"] == "unchanged":
-        return f"{r['label']} was about unchanged ({r['quarter_label']} vs {r['compared_with']})."
+        return f"{r['label']} was about unchanged {when}."
+    head = f"{r['label']} {'rose' if up else 'fell'} {fmt(r['change'])} {when}"
+    parts = g[~g["noise"]]
     if r["strength"] == "mixed":
-        parts = ", ".join(f"{x.driver_label} {'+' if x.contribution >= 0 else '-'}{fmt(x.contribution)}"
-                          for x in g[~g["noise"]].itertuples())
-        return f"{head}: no single driver ({parts})."
+        rev = g[g["driver"] == "revenue"]
+        costs = parts[parts["driver"].isin(["fuel", "other_costs"])]
+        if r["kpi"] == "operating_income" and len(rev) and rev.iloc[0]["contribution"] > 0 and not up:
+            cost_txt = " and ".join(f"{x.driver_label} {fmt(x.contribution)}" for x in costs.itertuples())
+            return f"{head}: revenue rose {fmt(rev.iloc[0]['contribution'])}, but costs rose more ({cost_txt})."
+        return f"{head}: no single driver ({'; '.join(_movement(x.driver, x.contribution, unit, fmt) for x in parts.itertuples())})."
+    main = g[g["rank"] == 1].iloc[0]
     word = "mostly" if r["strength"] == "mostly" else "partly"
-    sign = "+" if main["contribution"] >= 0 else "-"
-    s = f"{head}, {word} because of {main['driver_label']} ({sign}{fmt(main['contribution'])} of the change)"
-    against = g[(g["rank"] > 1) & ~g["noise"] & (np.sign(g["contribution"]) != np.sign(r["change"]))]
+    s = f"{head}, {word} because {_movement(main['driver'], main['contribution'], unit, fmt)}"
+    against = parts[(parts["rank"] > 1) & (np.sign(parts["contribution"]) != np.sign(r["change"]))]
     if len(against):
         a = against.iloc[0]
-        s += f", partly offset by {a['driver_label']} ({'+' if a['contribution'] >= 0 else '-'}{fmt(a['contribution'])})"
+        s += f", while {_movement(a['driver'], a['contribution'], unit, fmt)}"
     return s + "."
 
 
