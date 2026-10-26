@@ -603,8 +603,11 @@ def _drivers_for(items: list[Insight], page: str) -> list[Insight]:
     return [c for c in items if c.type == "driver" and c.id.split(":", 1)[1] in PAGE_DRIVER[page]]
 
 
+# only the size of a fall loses its extra minus ('fell -$354M', 'cuts income by -$417M'); a level keeps it
+# ('fell to -$351M' stays negative: free cash flow really is below zero)
 DOWN_MINUS = re.compile(r"\b((?:fell|dropped|declined|decreased|took|cuts?|cutting|reduces?|reducing|lowers?|lowering|lost|loses)"
-                        r"\b[^.\d\-\u2212]{0,60}?(?:by\s+)?(?:about\s+|around\s+|roughly\s+)?)[-\u2212](\$?\d)", re.IGNORECASE)
+                        r"\b(?:\s+(?:about|around|roughly)|(?:[^.\d\-\u2212]{0,60}?\sby(?:\s+(?:about|around|roughly))?))?\s+)"
+                        r"[-\u2212](\$?\d)", re.IGNORECASE)
 QUOTED_NUM = re.compile(r"[\"\u201c\u201d']([-\u2212+]?\$?\d[\d.,]*\s?(?:%|pp|bp|[MBK]\b|/gal)?)[\"\u201c\u201d']")
 
 

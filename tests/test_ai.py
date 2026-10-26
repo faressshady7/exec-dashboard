@@ -491,3 +491,10 @@ def test_period_names_are_not_figures():
     from dashboard.ai import check_numbers
     from dashboard.insights import Fact
     assert check_numbers("Replaying the last 12 months costs $4.47B.", [Fact("x", "impact", -4.47e9, "USD")]).passed
+
+
+def test_a_level_keeps_its_minus():
+    from dashboard.ai import Chapter, _unquote
+    t = lambda x: _unquote(Chapter(text=x, page=5)).text
+    assert t("Free cash flow fell to -$351M in Q2 2026.") == "Free cash flow fell to -$351M in Q2 2026."
+    assert t("Free cash flow fell -$815M to -$351M.") == "Free cash flow fell $815M to -$351M."
