@@ -314,6 +314,10 @@ def driver_sentence(g: pd.DataFrame) -> str:
             return f"{head}: revenue rose {fmt(rev.iloc[0]['contribution'])}, but costs rose more ({cost_txt})."
         return f"{head}: no single driver ({'; '.join(_movement(x.driver, x.contribution, unit, fmt) for x in parts.itertuples())})."
     main = g[g["rank"] == 1].iloc[0]
+    if abs(r["change"]) < 0.25 * abs(main["contribution"]):      # big moves that nearly cancel out
+        others = "; ".join(_movement(x.driver, x.contribution, unit, fmt) for x in parts[parts["rank"] > 1].itertuples())
+        return (f"{head}: {_movement(main['driver'], main['contribution'], unit, fmt)}, "
+                f"but almost all of it was cancelled out ({others}).")
     word = "mostly" if r["strength"] == "mostly" else "partly"
     s = f"{head}, {word} because {_movement(main['driver'], main['contribution'], unit, fmt)}"
     also = parts[(parts["rank"] > 1) & (np.sign(parts["contribution"]) == np.sign(r["change"]))
