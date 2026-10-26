@@ -17,14 +17,14 @@ YEARS = 3       # rolling window shown in the dashboard (matches project.display
 
 VIEWS: dict[str, str] = {
     "companies": """
-        SELECT ticker, name AS company, role, sort_order, industry FROM gold.dim_company""",
+        SELECT ticker, bi.short_name(name) AS company, role, sort_order, industry FROM gold.dim_company""",
 
     # KPI cards + peer comparison (latest quarter)
     # Each company vs the AVERAGE OF THE OTHER companies in the same quarter (own_gap), with a status pill.
     # "In line" = within 2% of that average. Colours are the dashboard theme (text, background).
     "kpi_latest": """
         WITH x AS (
-            SELECT c.name AS company, c.role, c.sort_order, pg.*,
+            SELECT bi.short_name(c.name) AS company, c.role, c.sort_order, pg.*,
                    (sum(pg.value) OVER w - pg.value) / NULLIF(count(*) OVER w - 1, 0) AS own_peer_avg
             FROM gold.peer_gap pg JOIN gold.dim_company c USING (ticker)
             WINDOW w AS (PARTITION BY pg.kpi))
@@ -44,7 +44,7 @@ VIEWS: dict[str, str] = {
 
     # KPI trend lines (last N years), unusual quarters marked
     "kpi_trend": f"""
-        SELECT k.ticker, c.name AS company, c.role, k.period_end::date AS quarter_end, k.quarter_label,
+        SELECT k.ticker, bi.short_name(c.name) AS company, c.role, k.period_end::date AS quarter_end, k.quarter_label,
                k.kpi, k.label, k.unit, k.better, k.value, k.unusual
         FROM gold.kpi_quarterly k JOIN gold.dim_company c USING (ticker)
         WHERE k.period_end >= current_date - interval '{YEARS} years'""",
@@ -53,6 +53,11 @@ VIEWS: dict[str, str] = {
     "market_today": """
         SELECT m.*, v.scope,
                to_char(m.latest, 'FM999,990.00') AS latest_text,
+               -- one notation everywhere: $4.63/gal, $115.22/bbl, 3.75% (same as the AI text)
+               CASE v.unit WHEN 'USD per gallon' THEN '$' || to_char(m.latest, 'FM999,990.00') || '/gal'
+                           WHEN 'USD per barrel' THEN '$' || to_char(m.latest, 'FM999,990.00') || '/bbl'
+                           WHEN 'percent' THEN to_char(m.latest, 'FM999,990.00') || '%'
+                           ELSE to_char(m.latest, 'FM999,990.00') || ' ' || COALESCE(v.unit, '') END AS latest_display,
                to_char(m.chg_1y, 'SGFM9990.0') || CASE m.change_type WHEN 'points' THEN ' points' ELSE '%' END || ' in 1 year' AS chg_1y_text,
                to_char(m.chg_1m, 'SGFM9990.0') || CASE m.change_type WHEN 'points' THEN ' points' ELSE '%' END || ' in 1 month' AS chg_1m_text,
                CASE WHEN m.percentile_10y >= 90 THEN 'VERY HIGH FOR 10 YEARS' WHEN m.percentile_10y >= 75 THEN 'HIGH FOR 10 YEARS' WHEN m.percentile_10y <= 10 THEN 'VERY LOW FOR 10 YEARS' WHEN m.percentile_10y <= 25 THEN 'LOW FOR 10 YEARS' ELSE 'NORMAL RANGE' END AS position_label,
@@ -72,7 +77,7 @@ VIEWS: dict[str, str] = {
 
     # What-if: one row per company with everything the sliders need (DAX: base + slope x slider)
     "whatif": """
-        SELECT c.ticker, c.name AS company, c.role, c.sort_order,
+        SELECT c.ticker, bi.short_name(c.name) AS company, c.role, c.sort_order,
                f.impact_per_unit_q          AS fuel_impact_per_pct,
                r.impact_per_unit_q          AS rate_impact_per_bp,
                f.base_operating_income_q, f.base_revenue_q, f.base_quarter::date AS base_quarter,
@@ -99,7 +104,7 @@ VIEWS: dict[str, str] = {
 
     # Precomputed scenarios: sensitivity grid, combined, historical replays
     "scenarios": """
-        SELECT c.name AS company, c.sort_order, s.*, bi.fmt(s.impact_q, 'USD') AS impact_text,
+        SELECT bi.short_name(c.name) AS company, c.sort_order, s.*, bi.fmt(s.impact_q, 'USD') AS impact_text,
                CASE WHEN s.within_past_range THEN 'SEEN BEFORE' ELSE 'BIGGER THAN ANY PAST MOVE' END AS range_label,
                CASE WHEN s.within_past_range THEN '#2E6B4F' ELSE '#8A5A00' END AS range_color,
                CASE WHEN s.within_past_range THEN '#DCEBDF' ELSE '#FBEFD3' END AS range_bg
@@ -111,7 +116,7 @@ VIEWS: dict[str, str] = {
 
     # News list with tier labels (last 30 days)
     "news": """
-        SELECT f.news_id, COALESCE(c.ticker, 'INDUSTRY') AS ticker, COALESCE(c.name, 'Airline industry') AS company,
+        SELECT f.news_id, COALESCE(c.ticker, 'INDUSTRY') AS ticker, COALESCE(bi.short_name(c.name), 'Airline industry') AS company,
                f.scope, d.full_date AS published, f.title, f.domain, f.url, f.tier, f.topic, f.usable,
                CASE f.tier WHEN 1 THEN 'Major outlet' WHEN 2 THEN 'Trade press' ELSE 'Other source' END AS tier_label
         FROM gold.fact_news f
@@ -189,13 +194,13 @@ VIEWS: dict[str, str] = {
 
     # Peer Benchmark: share prices rebased to 100 at the start of the window (empty until FMP_API_KEY is set)
     "stock_history": """
-        SELECT c.ticker, c.name AS company, c.role, c.sort_order, i.trade_date::date AS trade_date,
+        SELECT c.ticker, bi.short_name(c.name) AS company, c.role, c.sort_order, i.trade_date::date AS trade_date,
                i.close, i.index_100
         FROM gold.stock_index i JOIN gold.dim_company c USING (ticker)""",
 
     # Peer Benchmark: market cap, EV and multiples, one row per company (+ the comparability caveat)
     "valuation": """
-        SELECT c.name AS company, c.role, c.sort_order, v.*, w.caveat,
+        SELECT bi.short_name(c.name) AS company, c.role, c.sort_order, v.*, w.caveat,
                '$' || to_char(v.price, 'FM9,990.00') AS price_text,
                bi.fmt(v.market_cap, 'USD') AS market_cap_text, bi.fmt(v.enterprise_value, 'USD') AS ev_text,
                bi.fmt(v.net_debt, 'USD') AS net_debt_text,
@@ -242,6 +247,9 @@ def _assumptions_sql() -> str:
 
 # Display helpers (text for cards and tables, so Power BI needs no formatting logic)
 FUNCTIONS = [
+    # short display names: "United Airlines Holdings, Inc." -> "United Airlines" (charts, slicers, tables)
+    r"""CREATE OR REPLACE FUNCTION bi.short_name(n text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
+        SELECT btrim(regexp_replace(n, '(,)?( Holdings,?| Group)? Inc\.?$', '')) $$""",
     """CREATE OR REPLACE FUNCTION bi.fmt(v double precision, unit text) RETURNS text LANGUAGE sql IMMUTABLE AS $$
         SELECT CASE WHEN v IS NULL OR v = 'NaN'::float8 THEN '-'
             WHEN unit = 'USD' AND abs(v) >= 1e9 THEN CASE WHEN v < 0 THEN '-' ELSE '' END || '$' || to_char(abs(v) / 1e9, 'FM999,990.0') || 'B'
