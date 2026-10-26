@@ -923,6 +923,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
             ev_ids = {f.id for f in ev}
             outside = [x for x in cs.get("fact_ids", []) if x not in ev_ids]
             allowed = [f for f in ev if f.id in set(cs.get("fact_ids", []))] or ev
+            cs["title"] = _sentence_case(cs["title"])
             for part, limit in (("title", tmax), ("caption", cmax)):
                 key = f"{part}:{k}"
                 if key in ok or not cs[part].strip():

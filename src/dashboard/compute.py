@@ -272,12 +272,14 @@ def drivers(fin: pd.DataFrame) -> pd.DataFrame:
             strength = ("unchanged" if abs(change) <= SMALL[unit] else
                         "mostly" if same_way and abs(top_v) >= 0.5 * abs(change) and abs(top_v) >= 0.5 * sum(abs(v) for v in parts.values())
                         else "partly" if same_way else "mixed")
+            if strength in ("mostly", "partly") and abs(change) < 0.25 * abs(top_v):
+                strength = "offset"        # big parts that nearly cancel out: no 'mostly because' allowed
             for rank, (d, v) in enumerate(ranked, 1):
                 rows.append({"ticker": t, "kpi": kpi, "label": KPIS.get(kpi, ("Operating income",))[0],
                              "period_end": latest, "quarter_label": now["quarter_label"],
                              "compared_with": before["quarter_label"], "value_now": vn, "value_before": vb,
                              "change": change, "unit": unit, "driver": d, "driver_label": DRIVER_LABELS[d],
-                             "contribution": v, "rank": rank, "is_main": rank == 1 and strength in ("mostly", "partly"),
+                             "contribution": v, "rank": rank, "is_main": rank == 1 and strength in ("mostly", "partly", "offset"),
                              "strength": strength, "noise": abs(v) < max(SMALL[unit], 0.05 * abs(change))})
     return pd.DataFrame(rows)
 
