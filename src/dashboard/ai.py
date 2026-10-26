@@ -379,8 +379,7 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "", news: 
                f"it and what could happen next." if headline else "") + "\n\n"
             f"2. A page story for EACH page. Each page answers its own question:\n"
             + "\n".join(pages) + "\n"
-            f"   - back: one short phrase restating the previous chapter's finding WITH its number (e.g. 'Page 2 showed "
-            f"UAL's margin is 6.2% vs 6.0% for peers.'); empty on page 1.\n"
+            f"   - back: leave empty (written by code).\n"
             f"   - what: the answer to the page's question, one sentence (at most 150 characters), one number, from that page's own charts "
             f"(page 3: how much a fuel or rate move changes quarterly operating income; page 4: the effect of past "
             f"episodes; page 2: the gap vs peers; page 5: how the KPIs moved).\n"
@@ -895,7 +894,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
             what_ev = _evidence(items, PAGE_WHAT[k]) or ev
             drv = _drivers_for(items, k)
             checks = {"what": lambda x: _item_ok(x, what_ev, 160), "todo": lambda x: _todo_ok(x, facts),
-                      "back": lambda x: _back_ok(x, facts),
+
                       "why": lambda x: _why_ok(x, _same_metric(drv, ok.get(f"what:{k}", st.what)),
                                                [f for c in drv for f in c.facts] + ev)}
             checks.pop("todo")                        # v8: 'what to do' is written by code (code_todos)
@@ -963,6 +962,15 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
               "ai": {p: f"{p}:{k}" in ok and not (p == "todo" and k in todo_fixed) for p in ("back", "what", "why", "news", "todo")}}
         stories[k] = st
         pages[k] = " ".join(x for x in (st["what"], st["why"]) if x)       # older dashboards: one note per page
+    # v8: the link back is written by code, word for word from what the previous page said (the story runs
+    # 1 -> 2 -> 3 -> 4 -> 5), so it can never claim a page showed something it did not
+    prev_text = {"page_peers": (1, headline), "page_risks": (2, stories["page_peers"]["what"]),
+                 "page_whatif": (3, stories["page_risks"]["what"]), "page_detail": (4, stories["page_whatif"]["what"])}
+    for k, (n_, txt) in prev_text.items():
+        txt = (txt or "").strip()
+        stories[k]["back"] = f"Page {n_}: {txt}" if txt else ""
+        stories[k]["ai"]["back"] = False
+    stories["page_briefing"]["back"] = ""
     titles = {k: ok[f"title:{k}"] for k in CHARTS if f"title:{k}" in ok}
     captions = {k: ok[f"caption:{k}"] for k in CHARTS if f"caption:{k}" in ok}
     if not recs:
@@ -981,7 +989,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
                 "captions": f"{len(captions)}/{len(CHARTS)}", "options": ai_recs,
                 "pages": f"{sum(f'what:{k}' in ok for k in PAGES)}/{len(PAGES)}", "start_here": start is not None}
     # flags: cause words in a CHECKED 'why' are backed by arithmetic; flag them elsewhere only
-    flag_text = " ".join([st["what"] + " " + (st["todo"] if st["ai"]["todo"] else "") + " " + st["back"]   # code todos: fixed text
+    flag_text = " ".join([st["what"] + " " + (st["todo"] if st["ai"]["todo"] else "")   # code back/todo: not AI text
                           for st in stories.values()]
                          + list(titles.values()) + list(captions.values()) + [c["text"] for c in chapters]
                          + [f"{x['title']} {x['detail']}" for x in recs])

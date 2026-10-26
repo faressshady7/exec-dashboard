@@ -298,6 +298,8 @@ def test_page_story_news_must_match_the_page_topic_and_is_written_by_code():
     assert r3["news"] == "In the news: Reuters, 22 Oct: \u201cJet fuel jumps on refinery outages\u201d"
     assert "Pilots" not in res.stories["page_whatif"]["news"]
     assert res.coverage["news"] >= 1
+    # the link back is code-written, word for word from the previous page's 'what'
+    assert r3["back"] == "Page 2: " + res.stories["page_peers"]["what"] and not r3["ai"]["back"]
 
 
 # ---------------------------------------------------------------- time limits (daily run must finish)
