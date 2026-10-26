@@ -201,7 +201,7 @@ def _narrative_items():
 def _round3(detail):
     return {"page_briefing": "Jet fuel is $4.56/gal.", "page_peers": "United is mid-pack.", "page_risks": "A 10% rise costs about $379M.",
             "page_whatif": "Shocks are estimated from past quarters.", "page_detail": "Margins moved.",
-            "recommendations": [{"title": "Consider hedging part of next quarter's fuel", "detail": detail, "page": 3}]}
+            "recommendations": [{"title": "Review fuel exposure for next quarter", "detail": detail, "page": 3}]}
 
 
 def test_page_notes_and_options_are_checked():
