@@ -540,7 +540,11 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
             if not w_ok:
                 chk = Check(False, chk.numbers_found, [f"why: {w_why}"])
         if chk.passed and not _peer_quarter_ok(draft.headline):
-            chk = Check(False, chk.numbers_found, ["headline: a comparison with peers must name its quarter (e.g. 'in Q2 2026')"])
+            pq = _peer_quarter(cands)
+            if pq:                                   # code adds the quarter rather than failing a good headline
+                draft.headline = f"{draft.headline.rstrip('.')} ({pq})"[:120]
+            else:
+                chk = Check(False, chk.numbers_found, ["headline: a comparison with peers must name its quarter"])
         flags = check_wording(f"{draft.headline} {draft.situation} {draft.resolution}"
                               if draft.situation else f"{draft.headline} {draft.brief}", s.ai.flag_terms)
         attempts.append({"attempt": i + 1, "headline": draft.headline, "brief": draft.brief,
@@ -588,6 +592,25 @@ def _drivers_for(items: list[Insight], page: str) -> list[Insight]:
     return [c for c in items if c.type == "driver" and c.id.split(":", 1)[1] in PAGE_DRIVER[page]]
 
 
+def _metric(c: Insight) -> str:
+    """'Why net debt changed' -> 'net debt' (the KPI a driver insight explains)."""
+    m = re.match(r"why (.+) changed", c.title, re.IGNORECASE)
+    return m.group(1).lower() if m else ""
+
+
+def _names_metric(c: Insight, low: str) -> bool:
+    """'operating margin' is also named by 'margin', 'free cash flow' by 'cash flow', 'net debt' by 'debt'."""
+    m = _metric(c)
+    keys = [m] + ([m.split(" ", 1)[1]] if " " in m else [])
+    return bool(m) and any(re.search(r"\b" + re.escape(k) + r"\b", low) for k in keys)
+
+
+def _same_metric(drv: list[Insight], what: str) -> list[Insight]:
+    """If the page's 'what' is about one KPI that has a calculated why, the 'why' must explain that KPI."""
+    hit = [c for c in drv if _names_metric(c, (what or "").lower())]
+    return hit or drv
+
+
 def _strength(c: Insight) -> tuple[str, str]:
     s, _, d = (c.group or ":").partition(":")
     return s, d
@@ -611,6 +634,12 @@ def _why_ok(text_: str, drivers: list[Insight], facts: list[Fact]) -> tuple[bool
     if not good:
         return good, why
     low = text_.lower()
+    if drivers and not re.search(r"\d", text_):
+        return False, "vague: give the size of the change (e.g. 'Net debt fell $354M')"
+    named_kpi = [c for c in drivers if _names_metric(c, low)]
+    if drivers and not named_kpi:
+        return False, "say which number changed (" + ", ".join(_metric(c) for c in drivers) + ")"
+    drivers = named_kpi or drivers                  # check the parts of THAT metric only, not another one's
     parts = {f.id.split(".")[2] for c in drivers for f in c.facts if f.id.count(".") == 2 and f.id.split(".")[2] in DRIVER_WORDS}
     if parts and not any(w in low for d in parts for w in DRIVER_WORDS[d]):
         return False, "does not say what drove the change (name fuel, other costs, revenue, cash flow, capex or debt)"
@@ -662,8 +691,19 @@ def _item_ok(text_: str, facts: list[Fact], limit: int = 0) -> tuple[bool, str]:
     return chk.passed, ("" if chk.passed else "numbers not in this chart's or page's facts: " + ", ".join(chk.unmatched))
 
 
+CONNECTOR = re.compile(r"^(that is( mostly)?( because)?|so|which|and|but|against peers|as a result)[,:]?\s+", re.IGNORECASE)
 PEER_WORDS = re.compile(r"\b(peers?|rank\w*|among|first|last|ahead of|behind)\b|\b\d of \d\b", re.IGNORECASE)
 QUARTER = re.compile(r"\bQ[1-4] 20\d\d\b")
+
+
+def _peer_quarter(items: list[Insight]) -> str:
+    """The quarter peer comparisons use (the latest one all airlines reported), read from the peer insights."""
+    for c in items:
+        if c.type == "peer_gap":
+            m = QUARTER.search(c.summary + " " + " ".join(f.label for f in c.facts))
+            if m:
+                return m.group(0)
+    return ""
 
 
 def _peer_quarter_ok(text_: str) -> bool:
@@ -733,7 +773,10 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
         # ---- page 1 story: 3-4 chapters, each checked, each pointing to another page
         if not chapters and r.story:
             good_ch = []
+            pq = _peer_quarter(items)
             for c in r.story:
+                if pq and not _peer_quarter_ok(c.text):
+                    c.text = f"{c.text.strip().rstrip('.')} ({pq})."
                 key = next(k for k, v in PAGE_NUM.items() if v == c.page)
                 g_ok, why = _chapter_ok(c.text, _evidence(items, PAGE_EVIDENCE[key] + ("driver",)) or facts, c.page)
                 if g_ok and CAUSE.search(c.text):          # 'That is mostly because ...' needs a calculated driver
@@ -743,9 +786,16 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
                     good_ch.append({"text": c.text.strip(), "page": c.page})
                 else:
                     rejected.append(f"story chapter '{c.text[:40]}' ({why or 'empty'})")
+            last = i == s.ai.max_retries
+            if good_ch and CONNECTOR.match(good_ch[0]["text"]):
+                if last:                                 # keep the story readable: drop the dangling link word
+                    t0_ = CONNECTOR.sub("", good_ch[0]["text"]).strip()
+                    good_ch[0]["text"] = t0_[:1].upper() + t0_[1:]
+                else:
+                    rejected.append("story chapter 1 (must not start with a link word such as 'That is' or 'So')")
             if len({c["page"] for c in good_ch}) < len(good_ch):
                 rejected.append("story (each chapter must point to a different page)")
-            elif len(good_ch) >= 2:
+            elif len(good_ch) >= 2 and (last or not any(x.startswith("story") for x in rejected)):
                 chapters = good_ch
         # ---- page stories
         for k in PAGES:
@@ -755,7 +805,8 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
             drv = _drivers_for(items, k)
             checks = {"what": lambda x: _item_ok(x, what_ev, 160), "todo": lambda x: _todo_ok(x, facts),
                       "back": lambda x: _back_ok(x, facts),
-                      "why": lambda x: _why_ok(x, drv, [f for c in drv for f in c.facts] + ev)}
+                      "why": lambda x: _why_ok(x, _same_metric(drv, ok.get(f"what:{k}", st.what)),
+                                               [f for c in drv for f in c.facts] + ev)}
             for part, check in checks.items():
                 key, val = f"{part}:{k}", getattr(st, part).strip()
                 if key in ok or not val:

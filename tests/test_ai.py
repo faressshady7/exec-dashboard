@@ -402,3 +402,20 @@ def test_peer_claims_name_their_quarter():
     assert not _peer_quarter_ok("UAL free cash flow reaches $267M, ranking first among peers")
     assert _peer_quarter_ok("UAL free cash flow of $267M ranked first among peers in Q2 2026")
     assert _peer_quarter_ok("Free cash flow fell $1.43B in Q3 2026")
+
+
+def test_why_explains_the_same_metric():
+    from dashboard.ai import _same_metric, _why_ok
+    from dashboard.insights import Fact, Insight
+    nd = Insight(id="driver:net_debt", type="driver", title="Why net debt changed", summary="", group="mostly:liquidity", significance=0.8, impact=0.9,
+                 facts=[Fact("why.net_debt.change", "Net debt change", -354e6, "USD"),
+                        Fact("why.net_debt.liquidity", "Part from cash", -1.32e9, "USD")])
+    fcf = Insight(id="driver:free_cash_flow", type="driver", title="Why free cash flow changed", summary="", significance=0.8, impact=0.9,
+                  group="mostly:operating_cash_flow",
+                  facts=[Fact("why.free_cash_flow.change", "FCF change", -1.43e9, "USD"),
+                         Fact("why.free_cash_flow.operating_cash_flow", "Part from OCF", -753e6, "USD")])
+    facts = nd.facts + fcf.facts
+    drv = _same_metric([nd, fcf], "Net debt fell $354M in Q3 2026.")
+    assert not _why_ok("Mostly because operating cash flow fell $753M.", drv, facts)[0]      # FCF's why on a net-debt page
+    assert _why_ok("Net debt fell $354M, mostly because cash rose $1.32B.", drv, facts)[0]
+    assert not _why_ok("Operating income changed due to revenue and cost shifts.", [nd, fcf], facts)[0]
