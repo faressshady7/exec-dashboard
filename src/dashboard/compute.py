@@ -254,7 +254,8 @@ def drivers(fin: pd.DataFrame) -> pd.DataFrame:
         for kpi in DRIVER_KPIS:
             try:
                 vn, vb, unit, parts = _parts(kpi, now, before)
-            except (KeyError, ZeroDivisionError):
+            except (KeyError, ZeroDivisionError, TypeError, ValueError) as e:
+                print(f"::notice title=Why {t} {kpi}::not explained - {type(e).__name__}: {str(e)[:80]}")
                 continue
             if any(pd.isna(v) for v in [vn, vb, *parts.values()]):
                 need = {"operating_margin_pct": ["revenue", "fuel_expense", "operating_expenses", "operating_income"],
@@ -315,6 +316,10 @@ def driver_sentence(g: pd.DataFrame) -> str:
     main = g[g["rank"] == 1].iloc[0]
     word = "mostly" if r["strength"] == "mostly" else "partly"
     s = f"{head}, {word} because {_movement(main['driver'], main['contribution'], unit, fmt)}"
+    also = parts[(parts["rank"] > 1) & (np.sign(parts["contribution"]) == np.sign(r["change"]))
+                 & (parts["contribution"].abs() >= 0.25 * abs(r["change"]))]
+    if len(also):
+        s += f", and {_movement(also.iloc[0]['driver'], also.iloc[0]['contribution'], unit, fmt)}"
     against = parts[(parts["rank"] > 1) & (np.sign(parts["contribution"]) != np.sign(r["change"]))]
     if len(against):
         a = against.iloc[0]
