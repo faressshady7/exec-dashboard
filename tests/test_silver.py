@@ -230,6 +230,26 @@ def test_news_filter_tags_relevance_tier_block_and_duplicates():
     assert out.loc["i1", "kept"] and out.loc["i1", "tier"] == 3
 
 
+def test_news_test_topics_near_duplicates_and_usable():
+    import pandas as pd
+    from dashboard.silver import classify_news
+    s = load_settings()
+    ts = pd.Timestamp("2026-10-20", tz="UTC")
+    df = pd.DataFrame([
+        {"company_key": "UAL", "url": "a", "title": "United Airlines warns jet fuel costs will hit profit - Reuters", "domain": "reuters.com", "seen_at": ts},
+        {"company_key": "UAL", "url": "b", "title": "Jet fuel costs will hit United Airlines profit, airline warns", "domain": "cnbc.com", "seen_at": ts + pd.Timedelta(days=1)},
+        {"company_key": "UAL", "url": "c", "title": "United Airlines pilots vote to authorize strike", "domain": "skift.com", "seen_at": ts},
+        {"company_key": "UAL", "url": "d", "title": "United Airlines unveils new lounge design", "domain": "reuters.com", "seen_at": ts},
+        {"company_key": "UAL", "url": "e", "title": "United Airlines fuel surcharge story", "domain": "localnews.example", "seen_at": ts},
+    ])
+    out = classify_news(df, s).set_index("url")
+    assert out.loc["a", "topic"] == "fuel" and out.loc["a", "usable"]
+    assert out.loc["b", "duplicate"] and not out.loc["b", "usable"]         # same story in other words
+    assert out.loc["c", "topic"] == "labour" and out.loc["c", "usable"]
+    assert out.loc["d", "topic"] == "other" and not out.loc["d", "usable"]  # no dashboard topic
+    assert out.loc["e", "kept"] and not out.loc["e", "usable"]              # tier 3: shown, never used by AI
+
+
 def test_news_audit_scores_precision_per_tier(tmp_path):
     import pandas as pd
     from dashboard.news_audit import score

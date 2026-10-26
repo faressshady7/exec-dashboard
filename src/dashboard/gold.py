@@ -126,6 +126,8 @@ CREATE TABLE IF NOT EXISTS gold.fact_news (
     tier          SMALLINT                                          -- 1 major outlet, 2 trade press, 3 other
 );
 ALTER TABLE gold.fact_news ADD COLUMN IF NOT EXISTS tier SMALLINT;
+ALTER TABLE gold.fact_news ADD COLUMN IF NOT EXISTS topic TEXT;
+ALTER TABLE gold.fact_news ADD COLUMN IF NOT EXISTS usable BOOLEAN;
 
 CREATE TABLE IF NOT EXISTS gold.fact_stock (
     company_key  SMALLINT NOT NULL REFERENCES gold.dim_company,
@@ -229,11 +231,11 @@ FACT_SQL = {
         FROM silver.filing f JOIN gold.dim_company c ON c.ticker = f.ticker
         WHERE f.filing_date BETWEEN :start AND :end""",
     "fact_news": """
-        INSERT INTO gold.fact_news (company_key, date_key, url, title, domain, seen_at, scope, tier)
+        INSERT INTO gold.fact_news (company_key, date_key, url, title, domain, seen_at, scope, tier, topic, usable)
         SELECT c.company_key, to_char((n.seen_at AT TIME ZONE 'UTC')::date, 'YYYYMMDD')::int,
                n.url, n.title, n.domain, n.seen_at,
                CASE WHEN n.company_key = 'INDUSTRY' THEN 'industry' ELSE 'company' END AS scope,
-               n.tier
+               n.tier, COALESCE(n.topic, 'other'), COALESCE(n.usable, FALSE)
         FROM silver.news_article n
         LEFT JOIN gold.dim_company c ON c.ticker = n.company_key
         WHERE n.seen_at IS NOT NULL AND (n.seen_at AT TIME ZONE 'UTC')::date BETWEEN :start AND :end

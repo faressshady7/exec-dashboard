@@ -93,6 +93,9 @@ class NewsFilter(BaseModel):
     tier2: list[str] = []
     blocklist: list[str] = []
     ai_max_tier: int = Field(default=2, ge=1, le=3)
+    # topic -> words in the headline (first matching topic in this order is the article's topic)
+    topics: dict[str, list[str]] = {}
+    near_duplicate: float = Field(default=0.6, ge=0.3, le=1.0)   # share of shared words = same story
 
 
 class FinancialMetric(BaseModel):

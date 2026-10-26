@@ -112,7 +112,7 @@ VIEWS: dict[str, str] = {
     # News list with tier labels (last 30 days)
     "news": """
         SELECT f.news_id, COALESCE(c.ticker, 'INDUSTRY') AS ticker, COALESCE(c.name, 'Airline industry') AS company,
-               f.scope, d.full_date AS published, f.title, f.domain, f.url, f.tier,
+               f.scope, d.full_date AS published, f.title, f.domain, f.url, f.tier, f.topic, f.usable,
                CASE f.tier WHEN 1 THEN 'Major outlet' WHEN 2 THEN 'Trade press' ELSE 'Other source' END AS tier_label
         FROM gold.fact_news f
         LEFT JOIN gold.dim_company c USING (company_key)

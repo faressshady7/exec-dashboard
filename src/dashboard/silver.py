@@ -115,6 +115,8 @@ ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS relevant BOOLEAN;      
 ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS blocked BOOLEAN;        -- spam / content farm / state media
 ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS duplicate BOOLEAN;      -- same headline already kept
 ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS kept BOOLEAN;           -- relevant AND NOT blocked AND NOT duplicate
+ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS topic TEXT;            -- fuel / labour / results / ... / other
+ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS usable BOOLEAN;        -- passed the news test: the AI may use it
 
 CREATE TABLE IF NOT EXISTS silver.stock_price (
     ticker      TEXT NOT NULL,
@@ -645,8 +647,43 @@ def classify_news(df: pd.DataFrame, s: Settings) -> pd.DataFrame:
     cand = df[df["relevant"] & ~df["blocked"]].sort_values(["tier", "seen_at"])
     dup_idx = cand[cand.duplicated(["company_key", "norm_title"], keep="first")].index
     df.loc[dup_idx, "duplicate"] = True
+    df.loc[near_duplicates(df.drop(index=dup_idx), f.near_duplicate), "duplicate"] = True   # same story, other wording
     df["kept"] = df["relevant"] & ~df["blocked"] & ~df["duplicate"]
+    df["topic"] = df["title"].map(lambda x: news_topic(x, f.topics))
+    # the news test: kept (relevant, not blocked, not a repeat) + credible source + a topic the dashboard has
+    df["usable"] = df["kept"] & (df["tier"] <= f.ai_max_tier) & (df["topic"] != "other")
     return df
+
+
+STOP = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "as", "at", "by", "with", "after", "its", "is", "s"}
+
+
+def _words(norm_title: str) -> set:
+    return {w for w in (norm_title or "").split() if w not in STOP and len(w) > 1}
+
+
+def near_duplicates(df: pd.DataFrame, threshold: float) -> list:
+    """The same story told by several outlets: headlines sharing `threshold`+ of their words
+    (Jaccard) within 3 days count once; the best tier, then the earliest, is kept."""
+    cand = df[df["relevant"] & ~df["blocked"]].sort_values(["tier", "seen_at"])
+    out = []
+    for _, g in cand.groupby("company_key"):
+        kept: list[tuple] = []
+        for i, r in g.iterrows():
+            w, ts = _words(r["norm_title"]), pd.to_datetime(r["seen_at"], utc=True, errors="coerce")
+            dup = any(len(w | kw) and len(w & kw) / len(w | kw) >= threshold
+                      and (pd.isna(ts) or pd.isna(kts) or abs((ts - kts).days) <= 3) for kw, kts in kept)
+            (out.append(i) if dup else kept.append((w, ts)))
+    return out
+
+
+def news_topic(title: str, topics: dict) -> str:
+    """First topic (in settings order) with a word in the headline; 'other' if none."""
+    t = f" {(title or '').lower()} "
+    for topic, words in topics.items():
+        if any((f" {w.strip()} " in t) if len(w.strip()) <= 4 else (w.lower() in t) for w in words):
+            return topic
+    return "other"
 
 
 def refilter_news(eng: Engine, s: Settings) -> dict:
@@ -657,17 +694,21 @@ def refilter_news(eng: Engine, s: Settings) -> dict:
     if df.empty:
         return {"total": 0}
     df = classify_news(df, s)
-    rows = df[["company_key", "url", "norm_title", "tier", "relevant", "blocked", "duplicate", "kept"]]
+    rows = df[["company_key", "url", "norm_title", "tier", "relevant", "blocked", "duplicate", "kept", "topic", "usable"]]
     with eng.begin() as con:
         con.execute(text("""UPDATE silver.news_article SET norm_title=:norm_title, tier=:tier, relevant=:relevant,
-                            blocked=:blocked, duplicate=:duplicate, kept=:kept
+                            blocked=:blocked, duplicate=:duplicate, kept=:kept, topic=:topic, usable=:usable
                             WHERE company_key=:company_key AND url=:url"""),
                     rows.astype(object).to_dict("records"))
     rel = df[df["relevant"]]
     return {"total": len(df), "relevant": int(df["relevant"].sum()),
             "not_blocked": int((df["relevant"] & ~df["blocked"]).sum()), "kept": int(df["kept"].sum()),
             "tier1": int((df["kept"] & (df["tier"] == 1)).sum()), "tier2": int((df["kept"] & (df["tier"] == 2)).sum()),
-            "tier3": int((df["kept"] & (df["tier"] == 3)).sum()), "blocked_relevant": int((rel["blocked"]).sum())}
+            "tier3": int((df["kept"] & (df["tier"] == 3)).sum()), "blocked_relevant": int((rel["blocked"]).sum()),
+            "usable": int(df["usable"].sum()),
+            "usable_sample": [f"[{r.topic}] {r.company_key}: {str(r.title)[:90]}" for r in
+                              df[df["usable"]].sort_values("seen_at", ascending=False).head(8).itertuples()],
+            "usable_by_topic": df[df["usable"]]["topic"].value_counts().to_dict()}
 
 
 # =========================================================================== database
@@ -836,6 +877,12 @@ def main() -> None:
         print(f"  not spam / state media         {funnel['not_blocked']:>5}")
         print(f"  unique (duplicates removed)    {funnel['kept']:>5}  -> tier 1: {funnel['tier1']}, "
               f"tier 2: {funnel['tier2']}, tier 3: {funnel['tier3']}")
+        topics = ", ".join(f"{k} {v}" for k, v in funnel.get("usable_by_topic", {}).items()) or "none"
+        print(f"  passed the news test (AI may use) {funnel.get('usable', 0):>2}  -> {topics}")
+        print(f"::notice title=News test::{funnel['total']} downloaded -> {funnel['relevant']} relevant -> "
+              f"{funnel['kept']} unique -> {funnel.get('usable', 0)} passed (tier 1-2 + topic): {topics}")
+        if funnel.get("usable_sample"):
+            print("::notice title=News passed (newest)::" + " | ".join(funnel["usable_sample"]))
 
     cov = coverage(engine(), s)
     print(f"\nFINANCIALS COVERAGE (quarters or balance-sheet dates since {s.project.start_date})")

@@ -78,6 +78,18 @@ news_filter:
               theenterpriseleader.com, newsroomamerica.com, rustourismnews.com, presstv.ir, presstv.co.uk, sana.sy,
               rt.com, tass.com, sputnikglobe.com]
   ai_max_tier: 2           # the AI only sees tiers 1-2; the dashboard shows tiers 1-3 with a label
+  # News test (step 2 of the story layer): every kept headline gets ONE topic, the same topics the
+  # dashboard's numbers have, so the AI may only place news next to a number of the same topic.
+  # Order matters: the first topic whose word appears in the headline wins. No match = "other" (never used by the AI).
+  topics:
+    fuel: ["jet fuel", "fuel", "oil price", "crude", "refinery", "refineries", "opec", "kerosene"]
+    labour: ["pilot", "pilots", "flight attendant", "union", "strike", "walkout", "labor", "labour", "wage", "contract talks"]
+    results: ["earnings", "quarterly", "profit", "loss", "results", "guidance", "outlook", "forecast", "revenue"]
+    demand: ["demand", "bookings", "fares", "airfare", "airfares", "ticket", "passengers", "traffic", "travel season", "holiday travel"]
+    capacity: ["capacity", "fleet", "aircraft", "boeing", "airbus", "jet order", "new route", "routes", "terminal", "hub", "seats"]
+    finance: ["debt", "bond", "loan", "credit rating", "downgrade", "upgrade", "interest rate", "fed ", "buyback", "dividend"]
+    operations: ["delay", "delays", "cancel", "cancellations", "outage", "turbulence", "safety", "faa", "incident", "grounded", "weather"]
+  near_duplicate: 0.6      # headlines sharing 60%+ of their words within 3 days = the same story, kept once
 
 # Company financials from SEC XBRL (10-K / 10-Q). For each metric the tags are tried
 # in order; companies switch tags over time. Silver reports which tag matched.
