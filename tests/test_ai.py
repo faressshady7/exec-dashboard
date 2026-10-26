@@ -231,10 +231,10 @@ def test_brief_is_a_three_step_story_and_parts_are_kept():
             return r1(cands, {})
         assert "situation" in prompt and "complication" in prompt and "resolution" in prompt
         return {"headline": "H", "situation": "Value is 11.0% now.", "complication": "That is a cost.",
-                "resolution": "Consider the trend.", "fact_ids_used": ["f1"]}
+                "resolution": "Consider the trend at 11.0%.", "fact_ids_used": ["f1"]}
     res = generate(s, cands, MockLLM(reply))
-    assert res.brief == "Value is 11.0% now. That is a cost. Consider the trend."
-    assert res.parts == {"situation": "Value is 11.0% now.", "complication": "That is a cost.", "resolution": "Consider the trend."}
+    assert res.brief == "Value is 11.0% now. That is a cost. Consider the trend at 11.0%."
+    assert res.parts == {"situation": "Value is 11.0% now.", "complication": "That is a cost.", "resolution": "Consider the trend at 11.0%."}
 
 
 def test_captions_and_start_here_are_number_checked():

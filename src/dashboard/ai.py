@@ -544,6 +544,8 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
         draft.headline = _sentence_case(draft.headline)
         if chk.passed and draft.resolution.strip():          # no invented hedges / contracts in the resolution
             r_ok, r_why = _todo_ok(draft.resolution, facts)
+            if r_ok and not re.search(r"\d", re.sub(r"\b[Pp]age\s+\d\b", "", draft.resolution)):
+                r_ok, r_why = False, "too vague: say what to consider and the number that makes it matter"
             if not r_ok:
                 chk = Check(False, chk.numbers_found, [f"resolution: {r_why}"])
         if chk.passed and not _peer_quarter_ok(draft.headline):
