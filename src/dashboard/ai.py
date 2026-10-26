@@ -745,18 +745,19 @@ def code_todos(items: list[Insight], company: str) -> dict[str, tuple[str, int]]
     already on, with trade-offs that were not trade-offs). One fixed sentence per page, each pointing to the NEXT
     page, with wording chosen by the data where it matters (a margin lead vs a margin gap). Page 1 has none."""
     name = re.sub(r"(,)?( Holdings,?| Group)? Inc\.?$", "", company).strip()
+    pos = name + ("'" if name.endswith("s") else "'s")          # Delta Air Lines' / American Airlines'
     gap = next((f.value for c in items if c.id == "peer:operating_margin_pct" for f in c.facts
                 if f.id == "peer.operating_margin_pct.gap"), None)
     if gap is not None and gap < 0:
-        peers = (f"If {name}'s margin gap to its peers matters, examine its fuel exposure on page 3 before acting; "
+        peers = (f"If {pos} margin gap to its peers matters, examine its fuel exposure on page 3 before acting; "
                  f"cutting costs too fast could affect operating capacity.")
     else:
-        peers = (f"Before relying on {name}'s margin lead, check on page 3 how much a fuel rise could take away "
+        peers = (f"Before relying on {pos} margin lead, check on page 3 how much a fuel rise could take away "
                  f"from it.")
     return {"page_peers": (peers, 3),
             "page_risks": ("Test larger fuel-price and interest-rate moves on page 4 before making operating decisions; "
                            "the estimates depend on the assumptions listed there.", 4),
-            "page_whatif": (f"Treat these as scenarios, not forecasts; review {name}'s financial position on page 5 "
+            "page_whatif": (f"Treat these as scenarios, not forecasts; review {pos} financial position on page 5 "
                             f"before deciding how much risk it can absorb.", 5),
             "page_detail": ("Use these trends to decide what to look into next, not as proof of their causes; "
                             "the briefing on page 1 sums up today's story.", 1)}

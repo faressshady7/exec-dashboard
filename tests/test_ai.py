@@ -467,6 +467,6 @@ def test_what_to_do_is_code_written_and_follows_the_data():
         return Insight(id="peer:operating_margin_pct", type="peer_gap", title="t", summary="s", significance=0.5,
                        impact=0.5, facts=[Fact("peer.operating_margin_pct.gap", "gap", gap, "pp")])
     lead, behind = code_todos([peer(5.0)], "Delta Air Lines, Inc."), code_todos([peer(-5.0)], "American Airlines Group Inc.")
-    assert "Delta Air Lines's margin lead" in lead["page_peers"][0] and "cutting costs" not in lead["page_peers"][0]
-    assert "American Airlines's margin gap" in behind["page_peers"][0] and "cutting costs" in behind["page_peers"][0]
+    assert "Delta Air Lines' margin lead" in lead["page_peers"][0] and "cutting costs" not in lead["page_peers"][0]
+    assert "American Airlines' margin gap" in behind["page_peers"][0] and "cutting costs" in behind["page_peers"][0]
     assert [v[1] for v in lead.values()] == [3, 4, 5, 1]            # always points to the next page
