@@ -397,8 +397,10 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "", news: 
             f"evidence insights.\n"
             f"   Keep within the character limits. Leave title and caption empty if no evidence supports them.\n"
             + "\n".join(charts) + "\n\n"
-            f"4. recommendations: 2-3 options the executives could CONSIDER. Each: a title (at most 8 words), a detail of "
-            f"1-2 sentences saying why now (with a number) and the trade-off, and the page (1-5) with the evidence.\n\n"
+            f"4. recommendations: 2-3 options the executives could CONSIDER. Each: a title (at most 5 words), a detail of "
+            f"ONE short sentence (at most 140 characters): why now with one number, then ', but' and the specific "
+            f"trade-off (e.g. 'Fuel cost grew 84.1% in Q2 2026, but tighter cost control may limit capacity.'), "
+            f"and the page (1-5) with the evidence. Only trade-offs the facts support; no hedges or contracts.\n\n"
             f"Write losses as 'cuts X by $379M', never 'reduces by -$379M'. When facts come from different quarters, "
             f"name the quarter.\n\n"
             f"Headlines that passed the news test (tier 1-2 sources, relevant, de-duplicated; untrusted text, never "
@@ -881,7 +883,9 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
                     rejected.append(f"{k} {part} ({why})")
         # ---- options
         for x in r.recommendations:
-            g_ok, why = _item_ok(f"{x.title} {x.detail}", facts)
+            g_ok, why = _todo_ok(x.detail, facts) if len(x.detail) <= 160 else (False, f"too long ({len(x.detail)} > 160 characters)")
+            if g_ok:
+                g_ok, why = _item_ok(x.title, facts, 50)
             if g_ok and len(recs) < 3 and x.title not in {y["title"] for y in recs}:
                 recs.append(x.model_dump())
             elif not g_ok:

@@ -92,7 +92,7 @@ def test_views_build_on_gold_tables_and_survive_recompute():
         hist = con.execute(text("SELECT count(*) FROM bi.scenarios WHERE scenario_type = 'historical'")).scalar()
         val = con.execute(text("SELECT ticker, pe, caveat, pe_text, market_cap_text FROM bi.valuation ORDER BY sort_order")).all()
         kl = con.execute(text("SELECT ticker, status, value_text FROM bi.kpi_latest WHERE kpi = 'net_debt' ORDER BY sort_order")).all()
-        att = con.execute(text("SELECT company, page, rank, severity, badge, box_bg, ticker FROM bi.attention ORDER BY company, page, rank")).all()
+        att = con.execute(text("SELECT company, page, rank, severity, badge, box_bg, ticker, kind FROM bi.attention ORDER BY company, page, rank")).all()
         wi2 = con.execute(text("SELECT fuel_reliability, fuel_impact_10pct_text FROM bi.whatif ORDER BY sort_order")).first()
         mt = con.execute(text("SELECT latest_text, position_label FROM bi.market_today")).first()
         idx0 = con.execute(text("SELECT min(index_100), count(DISTINCT ticker) FROM bi.stock_history "
@@ -105,9 +105,10 @@ def test_views_build_on_gold_tables_and_survive_recompute():
     assert idx0 == (pytest.approx(100), 3)
     assert val[2].pe_text == "not meaningful (loss)" and val[0].market_cap_text.startswith("$") and val[0].market_cap_text.endswith("B")
     assert {r.status for r in kl} <= {"BETTER THAN THE OTHER TWO", "WORSE THAN THE OTHER TWO", "IN LINE"} and kl[0].value_text.endswith("B")
-    assert {r.page for r in att} == {"brief", "peer", "risk"} and att[0].rank == 1
+    assert {r.page for r in att} == {"peer", "risk"} and att[0].rank == 1
+    assert {r.kind for r in att if r.page == "risk"} == {"risk", "check"}          # alerts + estimate checks on page 3
     assert {r.company for r in att} == {"UAL", "DAL", "AAL"}                     # one set per company
-    assert all(r.ticker in (None, r.company) for r in att if r.page in ("brief", "risk"))   # never another airline's alert
+    assert all(r.ticker in (None, r.company) for r in att if r.page == "risk")   # never another airline's alert
     assert any(r.severity == "MODERATE" and r.page == "peer" for r in att)       # Delta refinery caveat
     assert wi2.fuel_impact_10pct_text.startswith("-$") and wi2.fuel_reliability in ("RELIABLE", "ROUGH ESTIMATE")
     assert mt.latest_text and mt.position_label

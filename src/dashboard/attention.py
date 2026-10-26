@@ -1,7 +1,8 @@
 """'Attention' boxes for the dashboard: rule-based, from computed results only (no AI, no invented data).
 
 One row = one box: company (whose page it appears on), page, rank (1 = show first), severity, title,
-impact, detail, ticker (the company the box is about; empty for market-wide boxes).
+impact, detail, ticker (the company the box is about; empty for market-wide boxes), kind (risk = market/KPI
+alert, check = how far to trust an estimate or comparison).
 Every company gets its own set, so the dashboard's company selector shows that company's boxes.
 Severity rules (documented, researcher's choice):
   HIGH      an UNFAVOURABLE unusual move in the focal company's latest quarter (> unusual_sigma)
@@ -17,7 +18,7 @@ import pandas as pd
 
 from dashboard.config import Settings
 
-COLS = ["company", "page", "rank", "severity", "title", "impact", "detail", "ticker"]
+COLS = ["company", "page", "rank", "severity", "title", "impact", "detail", "ticker", "kind"]
 ORDER = {"HIGH": 0, "MODERATE": 1, "MONITOR": 2}
 DRIVERS = ("cost", "rates")            # market categories that feed the sensitivities
 ROBUST_MIN = 80
@@ -133,13 +134,14 @@ def risk_boxes(sens: pd.DataFrame, s: Settings) -> list[dict]:
     return rows
 
 
-def _rank(rows: list[dict], page: str) -> pd.DataFrame:
+def _rank(rows: list[dict], page: str, kind: str = "check") -> pd.DataFrame:
     df = pd.DataFrame(rows)
     df["o"] = df["severity"].map(ORDER)
     df = df.sort_values(["o", "mag"], ascending=[True, False]).reset_index(drop=True)
     df["rank"] = df.index + 1
     df["page"] = page
     df["company"] = None
+    df["kind"] = kind
     return df[COLS]
 
 
@@ -151,10 +153,15 @@ def attention(kpis: pd.DataFrame, pg: pd.DataFrame, snap: pd.DataFrame, sens: pd
     for c in s.in_scope:
         sc = s.model_copy(update={"focal_company": c.ticker,
                                   "peers": [o.ticker for o in s.in_scope if o.ticker != c.ticker]})
-        df = pd.concat([_rank(brief_boxes(kpis, peer_gaps(kpis, sc), snap, sc), "brief"),
+        # v8 layout: the market/KPI alerts sit on Risk Drivers (page 3) above the estimate checks, in one
+        # "Risks and checks" panel; page 1 only shows how many need attention (kind = 'risk', HIGH or MODERATE)
+        risks = _rank(brief_boxes(kpis, peer_gaps(kpis, sc), snap, sc), "risk", "risk")
+        checks = _rank(risk_boxes(sens, sc), "risk", "check")
+        checks["rank"] += len(risks)
+        df = pd.concat([risks, checks,
                         _rank(peer_boxes(val, sc) or [{"severity": "MONITOR", "mag": 0, "title": "No comparability notes",
-                                                       "impact": "-", "detail": "-", "ticker": None}], "peer"),
-                        _rank(risk_boxes(sens, sc), "risk")], ignore_index=True)
+                                                       "impact": "-", "detail": "-", "ticker": None}], "peer")],
+                       ignore_index=True)
         df["company"] = c.ticker
         frames.append(df[COLS])
     return pd.concat(frames, ignore_index=True)
