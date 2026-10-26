@@ -542,7 +542,10 @@ def historical_moves(mkt: pd.DataFrame, s: Settings) -> list[dict]:
         r0, r1 = month_avg("fed_funds", start), month_avg("fed_funds", end)
         if pd.isna(f0) or pd.isna(f1):
             continue
-        out.append({"scenario": sc.name, "start": start.date(), "end": end.date(), "note": sc.note,
+        name = sc.name
+        if not sc.start and not sc.end:          # the rolling episode: name it by its real dates, not a fixed label
+            name = f"{sc.name.split(',')[0]} ({start:%b %Y}-{end:%b %Y})"
+        out.append({"scenario": name, "start": start.date(), "end": end.date(), "note": sc.note,
                     "fuel_pct": (f1 / f0 - 1) * 100, "rate_bp": 0.0 if pd.isna(r0) or pd.isna(r1) else (r1 - r0) * 100})
     return out
 

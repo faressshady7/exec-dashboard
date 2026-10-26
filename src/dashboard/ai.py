@@ -125,14 +125,14 @@ CHARTS = {"jet_fuel": "page 1: jet fuel price over 10 years",
 CHART_EVIDENCE = {"jet_fuel": ("market_position", "exposure"), "share_price": ("valuation",),
                   "valuation": ("valuation", "peer_gap"), "peer_bars": ("peer_gap",),
                   "sensitivity": ("exposure",), "fuel_exposure": ("exposure", "peer_gap"),
-                  "episodes": ("scenario",), "kpi_matrix": ("trend", "change_point")}
+                  "episodes": ("scenario_latest",), "kpi_matrix": ("trend", "change_point")}
 # charts that show ONE KPI only: their evidence is that KPI's insight, not every peer comparison
 CHART_ONLY = {"peer_bars": ("peer:operating_margin_pct",)}
 # room on the dashboard: (title, caption) in characters, from each chart panel's width
 # which computed insights each page note may draw on (so a page talks about what is on that page)
 PAGE_EVIDENCE = {"page_briefing": ("market_position", "exposure", "peer_gap", "trend", "change_point", "news_event"),
                  "page_peers": ("peer_gap", "valuation"), "page_risks": ("exposure", "market_position"),
-                 "page_whatif": ("scenario", "exposure"), "page_detail": ("trend", "change_point")}
+                 "page_whatif": ("scenario", "scenario_latest", "exposure"), "page_detail": ("trend", "change_point")}
 DOUBLE_NEG = re.compile(r"\b(reduc|cut|lower|decreas|fall|drop|declin|los)\w*\b[^.]{0,40}?\bby\s+(?:about\s+)?[-\u2212]\$?\d",
                         re.IGNORECASE)
 CHART_ROOM = {"jet_fuel": (34, 70), "share_price": (70, 150), "valuation": (70, 150), "peer_bars": (45, 80),
@@ -179,7 +179,7 @@ class Round3(BaseModel):
 PAGE_NUM = {"page_briefing": 1, "page_peers": 2, "page_risks": 3, "page_whatif": 4, "page_detail": 5}
 # the numbers a page's "what happened" may use = what that page's charts show
 PAGE_WHAT = {"page_briefing": ("market_position", "exposure", "peer_gap", "trend", "change_point", "driver"),
-             "page_peers": ("peer_gap", "valuation"), "page_risks": ("exposure",), "page_whatif": ("scenario",),
+             "page_peers": ("peer_gap", "valuation"), "page_risks": ("exposure",), "page_whatif": ("scenario_latest",),
              "page_detail": ("trend", "change_point", "driver")}
 # which calculated 'why' each page explains
 PAGE_DRIVER = {"page_briefing": ("operating_margin_pct", "operating_income"), "page_peers": ("operating_margin_pct",),
@@ -694,7 +694,7 @@ def template_narrative(items: list[Insight], news: list[dict] | None = None) -> 
     """Fallback: computed summaries and the code-written 'why'; no options (never unchecked advice)."""
     by = lambda *types: " ".join(c.summary for c in items if c.type in types and c.facts)[:600] or "No computed note for this page."
     what = {"page_briefing": by("market_position"), "page_peers": by("peer_gap", "valuation"),
-            "page_risks": by("exposure"), "page_whatif": by("scenario"), "page_detail": by("trend", "change_point")}
+            "page_risks": by("exposure"), "page_whatif": by("scenario_latest") if any(c.type == "scenario_latest" for c in items) else by("scenario"), "page_detail": by("trend", "change_point")}
     order = list(PAGES)
     stories = {}
     for i, k in enumerate(order):

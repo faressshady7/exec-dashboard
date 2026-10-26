@@ -326,9 +326,24 @@ def scenario_insights(sc: pd.DataFrame, focal: str) -> list[Insight]:
         if pd.notna(r.fuel_pct):
             facts.append(Fact(f"scen.{i}.fuel", f"{r.scenario}: jet fuel move", r.fuel_pct, "%"))
     names = ", ".join(h["scenario"].astype(str))
-    return [Insight(id="scenarios", type="scenario", title="Past episodes replayed on today's quarter",
-                    summary=f"Historical replays for {focal}: {names}.", facts=facts, significance=0.5, impact=0.6,
-                    sources=["gold.scenario (historical)"])]
+    out = [Insight(id="scenarios", type="scenario", title="Past episodes replayed on today's quarter",
+                   summary=f"Historical replays for {focal}: {names}.", facts=facts, significance=0.5, impact=0.6,
+                   sources=["gold.scenario (historical)"])]
+    # the most recent episode (latest end date, read from the data): the What-if page leads with what is happening
+    # now, not with an older episode
+    if "period" in h.columns and h["period"].notna().any():
+        ends = pd.to_datetime(h["period"].astype(str).str.split(" to ").str[-1], errors="coerce")
+        r = h.loc[ends.idxmax()]
+        lf = [Fact("scen.latest.impact", f"{r['scenario']}: estimated effect on {focal}'s quarterly operating income",
+                   r["impact_q"], "USD")]
+        if pd.notna(r.get("fuel_pct")):
+            lf.append(Fact("scen.latest.fuel", f"{r['scenario']}: jet fuel move", r["fuel_pct"], "%"))
+        out.append(Insight(id="scenario:latest", type="scenario_latest", title="The most recent episode replayed",
+                           summary=(f"Replaying the most recent episode, {r['scenario']} (jet fuel {r['fuel_pct']:+.1f}%), "
+                                    f"on today's quarter gives an estimated effect of {fmt(r['impact_q'], 'USD')} "
+                                    f"on {focal}'s quarterly operating income."),
+                           facts=lf, significance=0.6, impact=0.7, sources=["gold.scenario (historical, latest end date)"]))
+    return out
 
 
 def driver_insights(drv: pd.DataFrame, focal: str) -> list[Insight]:

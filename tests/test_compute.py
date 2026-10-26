@@ -242,3 +242,15 @@ def test_flat_kpi_is_reported_as_unchanged_not_explained():
     fcf = g[g.kpi == "free_cash_flow"]
     assert fcf["strength"].iloc[0] == "unchanged" and not fcf["is_main"].any()
     assert "about unchanged" in driver_sentence(fcf)
+
+
+def test_whatif_leads_with_the_most_recent_episode():
+    from dashboard.insights import scenario_insights
+    sc = pd.DataFrame([
+        {"ticker": "AAL", "scenario_type": "historical", "scenario": "2022 Ukraine war fuel spike", "impact_q": -2.92e9,
+         "fuel_pct": 68.4, "period": "2022-01-01 to 2022-06-30"},
+        {"ticker": "AAL", "scenario_type": "historical", "scenario": "Last 12 months (Oct 2025-Oct 2026)", "impact_q": -4.47e9,
+         "fuel_pct": 106.9, "period": "2025-10-22 to 2026-10-22"}])
+    ins = {i.id: i for i in scenario_insights(sc, "AAL")}
+    assert "Last 12 months (Oct 2025-Oct 2026)" in ins["scenario:latest"].summary and ins["scenario:latest"].type == "scenario_latest"
+    assert ins["scenario:latest"].facts[0].value == -4.47e9
