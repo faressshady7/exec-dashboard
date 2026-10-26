@@ -545,6 +545,7 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
             w_ok, w_why = _why_ok(draft.complication, whys, facts)
             if not w_ok:
                 chk = Check(False, chk.numbers_found, [f"why: {w_why}"])
+        draft.headline = _sentence_case(draft.headline)
         if chk.passed and not _peer_quarter_ok(draft.headline):
             pq = _peer_quarter(cands)
             if pq:                                   # code adds the quarter rather than failing a good headline
@@ -733,13 +734,19 @@ def _same_point(a: str, b: str) -> bool:
     return bool(na) and na <= nb
 
 
+def _sentence_case(t: str) -> str:
+    """'DAL Free Cash Flow Reaches $137M' -> 'DAL free cash flow reaches $137M' (tickers and acronyms kept)."""
+    words = t.split()
+    caps = [w for w in words[1:] if w[:1].isalpha()]
+    if caps and sum(w[:1].isupper() for w in caps) / len(caps) > 0.6:
+        t = " ".join([words[0]] + [w if (w.isupper() and len(w) > 1) else w.lower() for w in words[1:]])
+    return t
+
+
 def _tidy_chapter(t: str) -> str:
     """Steps read as sentences: 'UAL Free Cash Flow Reaches $267M' -> 'UAL free cash flow reaches $267M', and
     'Against peers,' is dropped when the sentence then compares nothing with the peers."""
-    words = t.split()
-    caps = [w for w in words[1:] if w[:1].isalpha()]
-    if caps and sum(w[:1].isupper() for w in caps) / len(caps) > 0.6:          # Title Case
-        t = " ".join([words[0]] + [w if (w.isupper() and len(w) > 1) else w.lower() for w in words[1:]])
+    t = _sentence_case(t)
     m = re.match(r"against peers,?\s+", t, re.IGNORECASE)
     if m and not PEER_WORDS.search(t[m.end():]) and not re.search(r"\bvs\b|average", t[m.end():], re.IGNORECASE):
         t = t[m.end():]
