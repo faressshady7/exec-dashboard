@@ -86,9 +86,10 @@ news_filter:
     labour: ["pilot", "pilots", "flight attendant", "union", "strike", "walkout", "labor", "labour", "wage", "contract talks"]
     results: ["earnings", "quarterly", "profit", "loss", "results", "guidance", "outlook", "forecast", "revenue"]
     demand: ["demand", "bookings", "fares", "airfare", "airfares", "ticket", "passengers", "traffic", "travel season", "holiday travel"]
-    capacity: ["capacity", "fleet", "aircraft", "boeing", "airbus", "jet order", "new route", "routes", "terminal", "hub", "seats"]
     finance: ["debt", "bond", "loan", "credit rating", "downgrade", "upgrade", "interest rate", "fed ", "buyback", "dividend"]
-    operations: ["delay", "delays", "cancel", "cancellations", "outage", "turbulence", "safety", "faa", "incident", "grounded", "weather"]
+    operations: ["delay", "delays", "cancel", "cancellations", "outage", "turbulence", "safety", "faa", "incident", "grounded",
+                 "weather", "blows tire", "emergency landing", "diverted", "evacuat"]
+    capacity: ["capacity", "fleet", "aircraft order", "boeing", "airbus", "jet order", "new route", "routes", "terminal", "hub", "seats"]
   near_duplicate: 0.6      # headlines sharing 60%+ of their words within 3 days = the same story, kept once
 
 # Company financials from SEC XBRL (10-K / 10-Q). For each metric the tags are tried
