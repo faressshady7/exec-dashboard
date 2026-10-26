@@ -443,3 +443,11 @@ def test_long_gap_down_word_minus_is_tidied():
     from dashboard.ai import Chapter, _unquote
     t = _unquote(Chapter(text="So a 10% rise in jet fuel reduces UAL quarterly operating income by -$417M.", page=4)).text
     assert t.endswith("by $417M.")
+
+
+def test_chapters_are_tidied():
+    from dashboard.ai import _tidy_chapter
+    assert _tidy_chapter("UAL Free Cash Flow Reaches $267M, Ranking 1 Among Peers (Q2 2026).") == \
+        "UAL free cash flow reaches $267M, ranking 1 among peers (Q2 2026)."
+    assert _tidy_chapter("Against peers, DAL net debt fell to $9.06B in Q3 2026.") == "DAL net debt fell to $9.06B in Q3 2026."
+    assert _tidy_chapter("Against peers, AAL operating margin ranks 3 of 3 at 2.7% (Q2 2026).").startswith("Against peers")

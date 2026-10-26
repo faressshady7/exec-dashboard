@@ -279,6 +279,10 @@ class GeminiLLM(LLM):
                     self.check_time()
                     time.sleep(float(wait.group(1)) + 1)      # per-minute limit: wait once, then retry
                     continue
+                if attempt == 0 and ("503" in msg or "UNAVAILABLE" in msg) and model != self.cfg.fallback_model:
+                    self.check_time()
+                    time.sleep(20)                            # main model briefly overloaded: one retry before the backup
+                    continue
                 if model != self.cfg.fallback_model and self.cfg.fallback_model and any(k.lower() in msg.lower() for k in busy):
                     self.fallback_reason = f"{type(e).__name__}: {str(e)[:90]}"
                     self.check_time()
@@ -722,6 +726,20 @@ PEER_WORDS = re.compile(r"\b(peers?|rank\w*|among|first|last|ahead of|behind)\b|
 QUARTER = re.compile(r"\bQ[1-4] 20\d\d\b")
 
 
+def _tidy_chapter(t: str) -> str:
+    """Steps read as sentences: 'UAL Free Cash Flow Reaches $267M' -> 'UAL free cash flow reaches $267M', and
+    'Against peers,' is dropped when the sentence then compares nothing with the peers."""
+    words = t.split()
+    caps = [w for w in words[1:] if w[:1].isalpha()]
+    if caps and sum(w[:1].isupper() for w in caps) / len(caps) > 0.6:          # Title Case
+        t = " ".join([words[0]] + [w if (w.isupper() and len(w) > 1) else w.lower() for w in words[1:]])
+    m = re.match(r"against peers,?\s+", t, re.IGNORECASE)
+    if m and not PEER_WORDS.search(t[m.end():]) and not re.search(r"\bvs\b|average", t[m.end():], re.IGNORECASE):
+        t = t[m.end():]
+        t = t[:1].upper() + t[1:]
+    return t
+
+
 def _peer_quarter(items: list[Insight]) -> str:
     """The quarter peer comparisons use (the latest one all airlines reported), read from the peer insights."""
     for c in items:
@@ -801,6 +819,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
             good_ch = []
             pq = _peer_quarter(items)
             for c in r.story:
+                c.text = _tidy_chapter(c.text)
                 if pq and not _peer_quarter_ok(c.text):
                     c.text = f"{c.text.strip().rstrip('.')} ({pq})."
                 # the link is decided by where the numbers are shown: the AI's page if it fits, else the first
