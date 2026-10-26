@@ -46,10 +46,10 @@ Runs automatically every day on GitHub Actions (06:17 Cairo, backup run 08:47), 
 |---|---|---|---|
 | 0 Settings | `config.py` | `settings.yaml` | checked settings (stops early if a setting is wrong) |
 | 1 Bronze | `bronze.py` | SEC filings, 15 FRED series, FMP share prices, GDELT news | raw files, untouched |
-| 2 Silver | `silver.py` | raw files | `silver.*`: clean, typed, de-duplicated; every dropped value counted with its reason |
+| 2 Silver | `silver.py` | raw files | `silver.*`: clean, typed, de-duplicated; every dropped value counted with its reason. **News test:** each headline gets a topic (fuel, labour, results, demand, finance, operations, capacity), near-duplicates are removed, and only trusted sources with a known topic are marked `usable` |
 | 3 Gold | `gold.py` | silver | `gold.*`: star schema, grain stated for every table |
-| 4 Compute | `compute.py`, `valuation.py`, `robustness.py`, `attention.py` | gold | KPIs, peer gaps, sensitivities, what-if, past-episode replays, valuation, rule-based alerts |
-| 5 AI | `insights.py`, `ai.py` | computed results only | `ai.*`: brief (situation, complication, resolution), page notes, chart titles and captions, options to consider |
+| 4 Compute | `compute.py`, `valuation.py`, `robustness.py`, `attention.py` | gold | KPIs, peer gaps (latest quarter all airlines reported), sensitivities, what-if, past-episode replays, valuation, rule-based alerts, and **the 'why'** (`gold.driver`): each KPI's change vs a year earlier split exactly into its parts (e.g. margin −1.1 pp = fuel −7.4 pp + other costs +6.3 pp) |
+| 5 AI | `insights.py`, `ai.py` | computed results + tested headlines only | `ai.*`: headline, page-1 story (steps that link to pages), a story per page (back / what / why / news / what to do / next), chart titles and captions, options to consider |
 | Views | `bi.py` | gold + compute + ai | `bi.*`: ready-made views that Power BI reads |
 | Helpers | `db.py`, `tags.py`, `news_audit.py`, `setkey.py` | | database connection, find a company's SEC tags, news-filter audit, save a key |
 
@@ -60,17 +60,23 @@ Runs automatically every day on GitHub Actions (06:17 Cairo, backup run 08:47), 
 | `silver` | Cleaned source data: `sec_fact`, `fred_observation`, `stock_price`, `share_count`, `news_article`, `filing`, plus the audit tables `drop_summary`, `missing_quarter`, `load_log`. |
 | `gold` | Star schema. Dimensions: `dim_company`, `dim_date`, `dim_variable`. Facts: `fact_financials` (company × metric × quarter), `fact_market` (variable × day), `fact_stock`, `fact_shares`, `fact_filing`, `fact_news`; plus the computed tables. |
 | `ai` | Every AI brief and every attempt, with the prompt version, the check result and the model used. |
-| `bi` | The views Power BI reads: `companies`, `kpi_latest`, `kpi_trend`, `market_today`, `market_history`, `whatif`, `scenarios`, `robustness`, `stock_history`, `valuation`, `attention`, `news`, `ai_brief`, `ai_recommendations`, `freshness`. |
+| `bi` | The views Power BI reads (`ai_brief` also carries the page stories `p1..p5_*` and steps `ch1..4_*`): `companies`, `kpi_latest`, `kpi_trend`, `market_today`, `market_history`, `whatif`, `scenarios`, `robustness`, `stock_history`, `valuation`, `attention`, `news`, `ai_brief`, `ai_recommendations`, `freshness`. |
 
 ## The AI layer in short
 
 - **Round 1, rank:** the code computes candidate insights; the AI scores how relevant each is to an executive today.
   Final score = 0.5 significance + 0.3 relevance + 0.2 impact (adapted from LEVA, Zhao et al. 2025).
 - **Round 2, brief:** a three-step story (situation, complication, resolution).
-- **Round 3, story layer:** a note per page, an action title and a so-what caption per chart, options to consider,
-  and the page to open first.
-- **Checks:** every number must match a computed fact; a failed item is rewritten once, then replaced by fixed text.
-  Cause and certainty words are flagged.
+- **Round 3, story layer:** the pages read as one connected story.
+  - Page 1: 2-4 steps, each one sentence with a number, each linking to the page that shows it.
+  - Pages 2-5, under the charts: **back** (what the previous page showed) → **what** (the answer to the page's question)
+    → **why** (from the calculated breakdown, never invented) → **news** (one tested headline, picked by id; the line
+    is written by code with outlet and date) → **what to do** (one option with its trade-off) → **next** page.
+  - An action title and a so-what caption per chart; 2-3 options to consider.
+- **Checks (code, on every line):** every number must match a computed fact from that page or chart; a 'why' must
+  name the KPI and the calculated driver ('mostly' only if that driver explains at least half); peer comparisons
+  must name their quarter; no double negatives or invented hedges. A failed line is rewritten once, then replaced
+  by computed text. Each run logs what was rejected and why.
 - **Study switch:** in Power BI, "AI text Off" hides all AI text; everything else stays identical.
 
 ## Running it by hand (Windows)
