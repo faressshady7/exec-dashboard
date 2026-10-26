@@ -944,6 +944,8 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
         for x in r.recommendations:
             g_ok, why = _todo_ok(x.detail, facts) if len(x.detail) <= 160 else (False, f"too long ({len(x.detail)} > 160 characters)")
             if g_ok:
+                g_ok, why = _todo_ok(x.title, facts)          # titles too: no 'Evaluate fuel hedging strategies'
+            if g_ok:
                 g_ok, why = _item_ok(x.title, facts, 50)
             if g_ok and len(recs) < 3 and x.title not in {y["title"] for y in recs}:
                 recs.append(x.model_dump())
