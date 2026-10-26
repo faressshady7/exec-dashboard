@@ -593,7 +593,7 @@ def _drivers_for(items: list[Insight], page: str) -> list[Insight]:
 
 
 DOWN_MINUS = re.compile(r"\b((?:fell|dropped|declined|decreased|took|cuts?|cutting|reduces?|reducing|lowers?|lowering|lost|loses)"
-                        r"\b[^.\d\-\u2212]{0,30}?(?:by\s+)?(?:about\s+|around\s+|roughly\s+)?)[-\u2212](\$?\d)", re.IGNORECASE)
+                        r"\b[^.\d\-\u2212]{0,60}?(?:by\s+)?(?:about\s+|around\s+|roughly\s+)?)[-\u2212](\$?\d)", re.IGNORECASE)
 QUOTED_NUM = re.compile(r"[\"\u201c\u201d']([-\u2212+]?\$?\d[\d.,]*\s?(?:%|pp|bp|[MBK]\b|/gal)?)[\"\u201c\u201d']")
 
 
@@ -801,8 +801,20 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
             for c in r.story:
                 if pq and not _peer_quarter_ok(c.text):
                     c.text = f"{c.text.strip().rstrip('.')} ({pq})."
-                key = next(k for k, v in PAGE_NUM.items() if v == c.page)
-                g_ok, why = _chapter_ok(c.text, _evidence(items, PAGE_EVIDENCE[key] + ("driver",)) or facts, c.page)
+                # the link is decided by where the numbers are shown: the AI's page if it fits, else the first
+                # page (not yet used) whose facts carry every number of the chapter
+                used_pages = {x["page"] for x in good_ch}
+                order = [c.page] + [p_ for p_ in (2, 3, 4, 5) if p_ != c.page]
+                g_ok, why = False, ""
+                for p_ in order:
+                    if p_ in used_pages:
+                        continue
+                    key = next(k for k, v in PAGE_NUM.items() if v == p_)
+                    ok_p, why_p = _chapter_ok(c.text, _evidence(items, PAGE_EVIDENCE[key] + ("driver",)) or facts, p_)
+                    if ok_p:
+                        c.page, g_ok, why = p_, True, ""
+                        break
+                    why = why or why_p
                 if g_ok and CAUSE.search(c.text):          # 'That is mostly because ...' needs a calculated driver
                     drv_all = [x for x in items if x.type == "driver"]
                     g_ok, why = _why_ok(c.text, drv_all, [f for x in drv_all for f in x.facts] + facts)

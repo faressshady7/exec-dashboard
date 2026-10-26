@@ -437,3 +437,9 @@ def test_down_word_minus_is_tidied_but_rose_minus_is_not():
     assert t("A 10% rise reduces quarterly operating income by about -$417M.") == "A 10% rise reduces quarterly operating income by about $417M."
     assert t("Fuel cost took -7.4 pp of margin.") == "Fuel cost took 7.4 pp of margin."
     assert t("Net debt rose -$354M.") == "Net debt rose -$354M."
+
+
+def test_long_gap_down_word_minus_is_tidied():
+    from dashboard.ai import Chapter, _unquote
+    t = _unquote(Chapter(text="So a 10% rise in jet fuel reduces UAL quarterly operating income by -$417M.", page=4)).text
+    assert t.endswith("by $417M.")
