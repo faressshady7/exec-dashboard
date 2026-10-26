@@ -11,6 +11,8 @@ The number checker later accepts a figure in the brief only if it matches one of
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import asdict, dataclass, field
 
 import numpy as np
@@ -272,6 +274,25 @@ def news_insights(eng: Engine, focal: str, days: int = 30, max_tier: int = 2) ->
 
 
 # =========================================================================== assemble
+_QTR = re.compile(r"\bQ([1-4]) (20\d\d)\b")
+
+
+def _quarters(ins: Insight) -> list[tuple[int, int]]:
+    text = ins.summary + " " + " ".join(f.label for f in ins.facts)
+    return [(int(y), int(q)) for q, y in _QTR.findall(text)]
+
+
+def recency(cands: list[Insight], older: float = 0.8) -> dict[str, float]:
+    """1.0 for insights about the newest quarter in the data (or with no quarter: market data, prices, news);
+    `older` for insights whose newest quarter is behind it (e.g. a Q2 peer comparison when Q3 is out)."""
+    newest = max((q for c in cands for q in _quarters(c)), default=None)
+    out = {}
+    for c in cands:
+        qs = _quarters(c)
+        out[c.id] = 1.0 if newest is None or not qs or max(qs) >= newest else older
+    return out
+
+
 def score(ins: Insight, w: dict) -> float:
     return round(w["significance"] * ins.significance + w["relevance"] * ins.relevance + w["impact"] * ins.impact, 4)
 

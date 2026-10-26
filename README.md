@@ -65,7 +65,9 @@ Runs automatically every day on GitHub Actions (06:17 Cairo, backup run 08:47), 
 ## The AI layer in short
 
 - **Round 1, rank:** the code computes candidate insights; the AI scores how relevant each is to an executive today.
-  Final score = 0.5 significance + 0.3 relevance + 0.2 impact (adapted from LEVA, Zhao et al. 2025).
+  Final score = 0.5 significance + 0.3 relevance + 0.2 impact (adapted from LEVA, Zhao et al. 2025), times a
+  recency factor (our adaptation): insights about an older quarter than the newest one keep 80% of their score, so the
+  headline speaks about now. Page 4 leads with the most recent episode (latest end date in the data).
 - **Round 2, brief:** a three-step story (situation, complication, resolution).
 - **Round 3, story layer:** the pages read as one connected story.
   - Page 1: 2-4 steps, each one sentence with a number, each linking to the page that shows it.

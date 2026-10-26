@@ -124,6 +124,9 @@ class AISettings(BaseModel):
     weights: dict[Literal["significance", "relevance", "impact"], float] = {
         "significance": 0.5, "relevance": 0.3, "impact": 0.2}
     max_retries: int = Field(default=1, ge=0, le=3)
+    # recency (our adaptation of LEVA): an insight about an older quarter than the newest one in the data keeps
+    # this share of its score, so the headline speaks about now; market data and the latest quarter count fully
+    recency_older: float = Field(default=0.8, ge=0.0, le=1.0)
     # A single model call is abandoned after request_timeout_s (then the backup model is tried);
     # once time_budget_s has passed for the whole AI step, the remaining text falls back to the
     # computed template, so the daily run always finishes inside the 30-minute GitHub job limit.

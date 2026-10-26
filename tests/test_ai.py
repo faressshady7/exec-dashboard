@@ -477,3 +477,11 @@ def test_what_to_do_is_code_written_and_follows_the_data():
 def test_against_peers_with_only_a_time_comparison_is_dropped():
     from dashboard.ai import _tidy_chapter
     assert _tidy_chapter("Against peers, net debt fell $354M in Q3 2026 vs a year earlier.") == "Net debt fell $354M in Q3 2026 vs a year earlier."
+
+
+def test_recency_lowers_older_quarter_insights():
+    from dashboard.insights import Fact, Insight, recency
+    mk = lambda i, lab: Insight(id=i, type="t", title="t", summary="s", significance=0.5, impact=0.5,
+                                facts=[Fact(i, lab, 1.0, "%")])
+    r = recency([mk("old", "UAL FCF (Q2 2026)"), mk("new", "UAL margin Q3 2026"), mk("mkt", "Jet fuel price")])
+    assert r == {"old": 0.8, "new": 1.0, "mkt": 1.0}

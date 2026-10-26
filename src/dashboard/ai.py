@@ -31,7 +31,7 @@ from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
 from dashboard.config import AISettings, PROJECT_ROOT, Settings, load_settings
-from dashboard.insights import Fact, Insight, build_candidates, narrative_facts, news_items, news_line, score
+from dashboard.insights import Fact, Insight, build_candidates, narrative_facts, news_items, news_line, recency, score
 
 PROMPT_VERSION = "v7"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
                         # v4 (20 Oct 2026): storytelling - brief as Situation/Complication/Resolution, chart captions, start here
@@ -516,9 +516,10 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
         print(f"  round 1 skipped ({str(e)[:80]}): ranking on significance and impact only")
         rel = {}
     timings = {"round1_s": round(time.time() - t1, 1)}
+    rec = recency(cands, s.ai.recency_older)       # adaptation of LEVA: older-quarter insights count less
     for c in cands:
         c.relevance = rel.get(c.id, 0.0)
-        c.score = score(c, s.ai.weights)
+        c.score = round(score(c, s.ai.weights) * rec.get(c.id, 1.0), 4)
     ranked = sorted(cands, key=lambda c: c.score, reverse=True)
     top = pick_diverse([c for c in ranked if c.facts], s.ai.pick) or ranked[: s.ai.pick]
     whys = [c for c in (whys or []) if c.id.split(":", 1)[1] in PAGE_DRIVER["page_briefing"]]
