@@ -539,6 +539,8 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
             w_ok, w_why = _why_ok(draft.complication, whys, facts)
             if not w_ok:
                 chk = Check(False, chk.numbers_found, [f"why: {w_why}"])
+        if chk.passed and not _peer_quarter_ok(draft.headline):
+            chk = Check(False, chk.numbers_found, ["headline: a comparison with peers must name its quarter (e.g. 'in Q2 2026')"])
         flags = check_wording(f"{draft.headline} {draft.situation} {draft.resolution}"
                               if draft.situation else f"{draft.headline} {draft.brief}", s.ai.flag_terms)
         attempts.append({"attempt": i + 1, "headline": draft.headline, "brief": draft.brief,
@@ -546,7 +548,7 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
         if chk.passed:
             return BriefResult(draft.headline, draft.brief, llm.name, top, cands, chk, attempts,
                                False, int((time.time() - t0) * 1000), timings, flags, _parts(draft))
-        feedback = f"these numbers are not in the facts: {', '.join(chk.unmatched)}."
+        feedback = f"fix these: {', '.join(chk.unmatched)} (numbers must be in the facts)."
     fb = template_brief(top, company)
     return BriefResult(fb.headline, fb.brief, llm.name, top, cands,
                        check_numbers(f"{fb.headline} {fb.brief}", facts), attempts, True,
@@ -654,16 +656,42 @@ def _item_ok(text_: str, facts: list[Fact], limit: int = 0) -> tuple[bool, str]:
         return False, f"too long ({len(text_)} > {limit} characters)"
     if DOUBLE_NEG.search(text_):
         return False, "double negative (write 'cuts it by $X', not 'reduces it by -$X')"
+    if SIGN_CLASH.search(text_):
+        return False, "sign clash (write 'fell $354M', not 'fell -$354M')"
     chk = check_numbers(text_, facts)
     return chk.passed, ("" if chk.passed else "numbers not in this chart's or page's facts: " + ", ".join(chk.unmatched))
+
+
+PEER_WORDS = re.compile(r"\b(peers?|rank\w*|among|first|last|ahead of|behind)\b|\b\d of \d\b", re.IGNORECASE)
+QUARTER = re.compile(r"\bQ[1-4] 20\d\d\b")
+
+
+def _peer_quarter_ok(text_: str) -> bool:
+    """Peer comparisons use the latest quarter ALL airlines reported, which can be older than the company's own
+    latest quarter (e.g. Q2 vs Q3). So a peer claim must name its quarter, or it reads as today's number."""
+    return not PEER_WORDS.search(text_) or bool(QUARTER.search(text_))
 
 
 def _chapter_ok(text_: str, page_facts: list[Fact], page: int) -> tuple[bool, str]:
     """A page-1 chapter: complete (no trailing '...'), short, and its numbers are shown on the page it points to."""
     if "..." in text_ or "\u2026" in text_:
         return False, "unfinished sentence ('...'): write the full sentence"
+    if not _peer_quarter_ok(text_):
+        return False, "a comparison with peers must name its quarter (e.g. 'in Q2 2026')"
     ok_, why = _item_ok(text_, page_facts, 170)
     return ok_, (why if ok_ or "too long" in why else f"use only numbers shown on page {page}: {why}")
+
+
+INVENTED = re.compile(r"\b(hedg\w*|contracts?|derivatives?|positions?)\b", re.IGNORECASE)
+SIGN_CLASH = re.compile(r"\b(fell|rose|dropped|declined|increased|decreased|grew)\s+(?:by\s+)?[-\u2212+]\$?\d", re.IGNORECASE)
+
+
+def _todo_ok(text_: str, facts: list[Fact]) -> tuple[bool, str]:
+    """'What to do': numbers checked, and no hedges/contracts/positions the facts never mention."""
+    m = INVENTED.search(text_)
+    if m and not any(m.group(1).lower()[:4] in f.label.lower() for f in facts):
+        return False, f"mentions '{m.group(1)}', which is not in the facts"
+    return _item_ok(text_, facts, 220)
 
 
 def _back_ok(text_: str, facts: list[Fact]) -> tuple[bool, str]:
@@ -708,6 +736,9 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
             for c in r.story:
                 key = next(k for k, v in PAGE_NUM.items() if v == c.page)
                 g_ok, why = _chapter_ok(c.text, _evidence(items, PAGE_EVIDENCE[key] + ("driver",)) or facts, c.page)
+                if g_ok and CAUSE.search(c.text):          # 'That is mostly because ...' needs a calculated driver
+                    drv_all = [x for x in items if x.type == "driver"]
+                    g_ok, why = _why_ok(c.text, drv_all, [f for x in drv_all for f in x.facts] + facts)
                 if g_ok and c.text.strip():
                     good_ch.append({"text": c.text.strip(), "page": c.page})
                 else:
@@ -722,7 +753,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
             ev = _evidence(items, PAGE_EVIDENCE[k] + ("driver",)) or facts
             what_ev = _evidence(items, PAGE_WHAT[k]) or ev
             drv = _drivers_for(items, k)
-            checks = {"what": lambda x: _item_ok(x, what_ev, 160), "todo": lambda x: _item_ok(x, facts, 220),
+            checks = {"what": lambda x: _item_ok(x, what_ev, 160), "todo": lambda x: _todo_ok(x, facts),
                       "back": lambda x: _back_ok(x, facts),
                       "why": lambda x: _why_ok(x, drv, [f for c in drv for f in c.facts] + ev)}
             for part, check in checks.items():

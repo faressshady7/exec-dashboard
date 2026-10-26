@@ -381,6 +381,24 @@ def test_chapter_and_back_checks():
     f = [Fact("x", "UAL operating margin", 6.2, "%")]
     assert not _chapter_ok("Margin is 6.2%. That is mostly...", f, 2)[0]        # unfinished
     assert not _chapter_ok("Jet fuel is $4.63 a gallon.", f, 2)[0]               # number not on page 2
-    assert _chapter_ok("UAL margin is 6.2%, ahead of peers.", f, 2)[0]
+    assert _chapter_ok("UAL margin is 6.2% in Q2 2026, ahead of peers.", f, 2)[0]
+    assert not _chapter_ok("UAL margin is 6.2%, ahead of peers.", f, 2)[0]       # peer claim without quarter
     assert not _back_ok("Page 2 showed UAL peer positioning.", f)[0]             # vague, no number
     assert _back_ok("Page 2 showed UAL's margin is 6.2%.", f)[0]
+
+
+def test_todo_and_sign_checks():
+    from dashboard.ai import _item_ok, _todo_ok
+    from dashboard.insights import Fact
+    f = [Fact("x", "UAL net debt change", -354e6, "USD")]
+    assert not _todo_ok("Weigh protection against hedging costs.", f)[0]
+    assert _todo_ok("Review net debt, which fell $354M.", f)[0]
+    assert not _item_ok("Net debt fell -$354M.", f)[0]
+    assert _item_ok("Net debt fell $354M.", f)[0]
+
+
+def test_peer_claims_name_their_quarter():
+    from dashboard.ai import _peer_quarter_ok
+    assert not _peer_quarter_ok("UAL free cash flow reaches $267M, ranking first among peers")
+    assert _peer_quarter_ok("UAL free cash flow of $267M ranked first among peers in Q2 2026")
+    assert _peer_quarter_ok("Free cash flow fell $1.43B in Q3 2026")
