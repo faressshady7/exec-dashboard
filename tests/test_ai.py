@@ -419,3 +419,12 @@ def test_why_explains_the_same_metric():
     assert not _why_ok("Mostly because operating cash flow fell $753M.", drv, facts)[0]      # FCF's why on a net-debt page
     assert _why_ok("Net debt fell $354M, mostly because cash rose $1.32B.", drv, facts)[0]
     assert not _why_ok("Operating income changed due to revenue and cost shifts.", [nd, fcf], facts)[0]
+
+
+def test_quoted_numbers_are_unquoted_and_sign_checked():
+    from dashboard.ai import Chapter, _item_ok, _unquote
+    from dashboard.insights import Fact
+    c = _unquote(Chapter(text='So a 10% rise cuts income by "-$417M".', page=3))
+    assert c.text == "So a 10% rise cuts income by -$417M."
+    assert not _item_ok(c.text, [Fact("x", "impact", -417e6, "USD")])[0]
+    assert not _item_ok("Fuel took -7.4 pp of margin.", [Fact("y", "fuel part", -7.4, "pp")])[0]

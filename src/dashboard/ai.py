@@ -527,7 +527,7 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
     for i in range(s.ai.max_retries + 1):
         t2 = time.time()
         try:
-            draft = llm.json(round2_prompt(top, company, feedback, whys), Round2)
+            draft = _unquote(llm.json(round2_prompt(top, company, feedback, whys), Round2))
             timings[f"round2_attempt{i + 1}_s"] = round(time.time() - t2, 1)
         except Exception as e:                      # bad / cut-off answer = a failed attempt, not a crash
             attempts.append({"attempt": i + 1, "headline": "", "brief": "", "passed": False,
@@ -592,6 +592,23 @@ def _drivers_for(items: list[Insight], page: str) -> list[Insight]:
     return [c for c in items if c.type == "driver" and c.id.split(":", 1)[1] in PAGE_DRIVER[page]]
 
 
+QUOTED_NUM = re.compile(r"[\"\u201c\u201d']([-\u2212+]?\$?\d[\d.,]*\s?(?:%|pp|bp|[MBK]\b|/gal)?)[\"\u201c\u201d']")
+
+
+def _unquote(obj):
+    """The model sometimes copies display values with their quotes ('cuts it by "-$417M"'): strip them,
+    so the text reads normally and the sign/double-negative checks still see the number."""
+    if isinstance(obj, BaseModel):
+        for name in type(obj).model_fields:
+            setattr(obj, name, _unquote(getattr(obj, name)))
+        return obj
+    if isinstance(obj, list):
+        return [_unquote(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: _unquote(v) for k, v in obj.items()}
+    return QUOTED_NUM.sub(r"\1", obj) if isinstance(obj, str) else obj
+
+
 def _metric(c: Insight) -> str:
     """'Why net debt changed' -> 'net debt' (the KPI a driver insight explains)."""
     m = re.match(r"why (.+) changed", c.title, re.IGNORECASE)
@@ -637,7 +654,7 @@ def _why_ok(text_: str, drivers: list[Insight], facts: list[Fact]) -> tuple[bool
     if drivers and not re.search(r"\d", text_):
         return False, "vague: give the size of the change (e.g. 'Net debt fell $354M')"
     named_kpi = [c for c in drivers if _names_metric(c, low)]
-    if drivers and not named_kpi:
+    if drivers and not named_kpi and CAUSE.search(text_):
         return False, "say which number changed (" + ", ".join(_metric(c) for c in drivers) + ")"
     drivers = named_kpi or drivers                  # check the parts of THAT metric only, not another one's
     parts = {f.id.split(".")[2] for c in drivers for f in c.facts if f.id.count(".") == 2 and f.id.split(".")[2] in DRIVER_WORDS}
@@ -723,7 +740,7 @@ def _chapter_ok(text_: str, page_facts: list[Fact], page: int) -> tuple[bool, st
 
 
 INVENTED = re.compile(r"\b(hedg\w*|contracts?|derivatives?|positions?)\b", re.IGNORECASE)
-SIGN_CLASH = re.compile(r"\b(fell|rose|dropped|declined|increased|decreased|grew)\s+(?:by\s+)?[-\u2212+]\$?\d", re.IGNORECASE)
+SIGN_CLASH = re.compile(r"\b(fell|rose|dropped|declined|increased|decreased|grew|took|cuts?|reduces?|lowers?)\s+(?:by\s+)?[-\u2212+]\$?\d", re.IGNORECASE)
 
 
 def _todo_ok(text_: str, facts: list[Fact]) -> tuple[bool, str]:
@@ -759,10 +776,10 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
     ok: dict[str, object] = {}                   # accepted item key -> value
     recs: list[dict] = []
     chapters: list[dict] = []
-    feedback, used = "", 0
+    feedback, used, last_rejected = "", 0, []
     for i in range(s.ai.max_retries + 1):
         try:
-            r = llm.json(round3_prompt(items, company, feedback, news, headline), Round3)
+            r = _unquote(llm.json(round3_prompt(items, company, feedback, news, headline), Round3))
         except Exception as e:                   # invalid JSON, timeout, budget used up
             feedback = feedback or "your previous answer was not valid JSON. Reply with the JSON object only."
             if isinstance(e, TimeoutError):
@@ -850,6 +867,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
                 recs.append(x.model_dump())
             elif not g_ok:
                 rejected.append(f"option '{x.title[:40]}' ({why})")
+        last_rejected = rejected
         if not rejected:
             break
         feedback = "; ".join(rejected)
@@ -872,7 +890,8 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
     start = (chapters[0]["page"], chapters[0]["text"]) if chapters else None
     n_parts = sum(f"{p}:{k}" in ok for k in PAGES for p in ("what", "why", "todo"))
     ai_recs = 0 if recs and recs[0]["title"].startswith("No AI") else len(recs)
-    coverage = {"story": len(chapters), "page_parts": f"{n_parts}/{3 * len(PAGES)}",
+    coverage = {"still_rejected": "; ".join(last_rejected)[:700] if used else "no valid answer",
+                "story": len(chapters), "page_parts": f"{n_parts}/{3 * len(PAGES)}",
                 "news": sum(f"news:{k}" in ok for k in PAGES), "titles": f"{len(titles)}/{len(CHARTS)}",
                 "captions": f"{len(captions)}/{len(CHARTS)}", "options": ai_recs,
                 "pages": f"{sum(f'what:{k}' in ok for k in PAGES)}/{len(PAGES)}", "start_here": start is not None}
@@ -1015,6 +1034,9 @@ def _brief_one(s: Settings, llm: LLM, freeze: bool, eng) -> None:
           f"story {cov.get('story')} chapters | page parts {cov.get('page_parts')} | news {cov.get('news')}/5 | "
           f"titles {cov.get('titles')} | captions {cov.get('captions')} | options {cov.get('options')} | "
           f"{r.latency_ms / 1000:.0f}s brief" + (f" | backup because {llm.fallback_reason}" if llm.fallback_reason else ""))
+    r2_fail = [u for a in r.attempts if not a.get("passed") for u in a.get("unmatched", [])]
+    print(f"::notice title=Rejected {s.focal_company}::brief: {'; '.join(r2_fail)[:400] or 'none'} || "
+          f"story layer (after last try): {cov.get('still_rejected') or 'none'}")
     st = n.stories.get("page_risks", {})
     print(f"::notice title=Story {s.focal_company}::" + " / ".join(f"p{c['page']}: {c['text']}" for c in n.chapters)
           + f" || PAGE 3: {st.get('back', '')} | WHAT {st.get('what', '')} | WHY {st.get('why', '')} | "
