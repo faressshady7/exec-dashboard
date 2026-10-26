@@ -947,7 +947,9 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
                 g_ok, why = _todo_ok(x.title, facts)          # titles too: no 'Evaluate fuel hedging strategies'
             if g_ok:
                 g_ok, why = _item_ok(x.title, facts, 50)
-            if g_ok and len(recs) < 3 and x.title not in {y["title"] for y in recs}:
+            dup = any(x.title == y["title"] or _same_point(x.detail, y["detail"]) and _same_point(y["detail"], x.detail)
+                      for y in recs)                  # same numbers both ways = the same option twice
+            if g_ok and len(recs) < 3 and not dup:
                 recs.append(x.model_dump())
             elif not g_ok:
                 rejected.append(f"option '{x.title[:40]}' ({why})")
