@@ -373,3 +373,14 @@ def test_double_negative_and_start_here_on_page_1_are_rejected():
     res = narrate(s, _narrative_items(), MockLLM(lambda p, schema: dict(_round3("Fuel is $4.56/gal; trade-off: none."),
                                                                         start_page=1, start_reason="Fuel is $4.56/gal.")))
     assert res.start_reason == "" and res.coverage["start_here"] is False
+
+
+def test_chapter_and_back_checks():
+    from dashboard.ai import _back_ok, _chapter_ok
+    from dashboard.insights import Fact
+    f = [Fact("x", "UAL operating margin", 6.2, "%")]
+    assert not _chapter_ok("Margin is 6.2%. That is mostly...", f, 2)[0]        # unfinished
+    assert not _chapter_ok("Jet fuel is $4.63 a gallon.", f, 2)[0]               # number not on page 2
+    assert _chapter_ok("UAL margin is 6.2%, ahead of peers.", f, 2)[0]
+    assert not _back_ok("Page 2 showed UAL peer positioning.", f)[0]             # vague, no number
+    assert _back_ok("Page 2 showed UAL's margin is 6.2%.", f)[0]

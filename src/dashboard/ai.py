@@ -342,7 +342,8 @@ def round2_prompt(top: list[Insight], company: str, feedback: str = "", whys: li
             f"- fact_ids_used: ids of every fact whose number you cite.\n\n" + "\n".join(blocks) + fb)
 
 
-def round3_prompt(items: list[Insight], company: str, feedback: str = "", news: list[dict] | None = None) -> str:
+def round3_prompt(items: list[Insight], company: str, feedback: str = "", news: list[dict] | None = None,
+                  headline: str = "") -> str:
     blocks = []
     for c in items:
         facts = "\n".join(f'    - id: {f.id} | {f.label} | display: "{f.display()}"' for f in c.facts) or "    (no numbers)"
@@ -368,13 +369,15 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "", news: 
             f"1. story: 3-4 chapters for page 1 that read as ONE connected story, in the order that matters most TODAY, "
             f"each pointing to a DIFFERENT page (2-5). Typical arc: what changed (the main problem) -> why (from a "
             f"calculated why) -> how big the risk is -> how we compare or what could happen next. Each chapter: one "
-            f"sentence of at most 18 words with a number; link them ('That is mostly...', 'So...', 'Against peers...'). "
-            f"Do not just list prices.\n\n"
+            f"sentence of at most 18 words with a number, using ONLY numbers shown on the page it points to; link them "
+            f"with words like 'That is mostly because', 'So', 'Against peers'. Never end with '...'. Do not just list prices."
+            + (f" The page-1 headline is: '{headline}'. Chapter 1 must make that point; the next chapters explain "
+               f"it and what could happen next." if headline else "") + "\n\n"
             f"2. A page story for EACH page. Each page answers its own question:\n"
             + "\n".join(pages) + "\n"
-            f"   - back: one short phrase linking to the story so far (e.g. 'Page 1 showed fuel is the main pressure.'); "
-            f"empty on page 1.\n"
-            f"   - what: the answer to the page's question, one sentence, one number, from that page's own charts "
+            f"   - back: one short phrase restating the previous chapter's finding WITH its number (e.g. 'Page 2 showed "
+            f"UAL's margin is 6.2% vs 6.0% for peers.'); empty on page 1.\n"
+            f"   - what: the answer to the page's question, one sentence (at most 150 characters), one number, from that page's own charts "
             f"(page 3: how much a fuel or rate move changes quarterly operating income; page 4: the effect of past "
             f"episodes; page 2: the gap vs peers; page 5: how the KPIs moved).\n"
             f"   - why: one sentence from the page's 'why' insights (calculated by code). Say 'mostly because' ONLY when "
@@ -655,11 +658,27 @@ def _item_ok(text_: str, facts: list[Fact], limit: int = 0) -> tuple[bool, str]:
     return chk.passed, ("" if chk.passed else "numbers not in this chart's or page's facts: " + ", ".join(chk.unmatched))
 
 
+def _chapter_ok(text_: str, page_facts: list[Fact], page: int) -> tuple[bool, str]:
+    """A page-1 chapter: complete (no trailing '...'), short, and its numbers are shown on the page it points to."""
+    if "..." in text_ or "\u2026" in text_:
+        return False, "unfinished sentence ('...'): write the full sentence"
+    ok_, why = _item_ok(text_, page_facts, 170)
+    return ok_, (why if ok_ or "too long" in why else f"use only numbers shown on page {page}: {why}")
+
+
+def _back_ok(text_: str, facts: list[Fact]) -> tuple[bool, str]:
+    """The link back must restate a finding with its number, not a vague 'Page 2 showed peer positioning'."""
+    if not re.search(r"\d", re.sub(r"\b[Pp]age\s+\d\b", "", text_)):
+        return False, "vague: restate the previous page's finding with its number"
+    return _item_ok(text_, facts, 120)
+
+
 def _evidence(items: list[Insight], types: tuple, only: tuple = ()) -> list[Fact]:
     return [f for c in items if c.type in types and (not only or c.id in only) for f in c.facts]
 
 
-def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None = None) -> NarrativeResult:
+def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None = None,
+            headline: str = "") -> NarrativeResult:
     """Round 3 (v7): the story layer - page 1 chapters, a page story per page, chart stories and options.
     Every item is checked ON ITS OWN (numbers against its own page or chart, 'why' against the calculated
     drivers, headlines by id against the tested list); passing items are kept, failed ones get one targeted
@@ -675,7 +694,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
     feedback, used = "", 0
     for i in range(s.ai.max_retries + 1):
         try:
-            r = llm.json(round3_prompt(items, company, feedback, news), Round3)
+            r = llm.json(round3_prompt(items, company, feedback, news, headline), Round3)
         except Exception as e:                   # invalid JSON, timeout, budget used up
             feedback = feedback or "your previous answer was not valid JSON. Reply with the JSON object only."
             if isinstance(e, TimeoutError):
@@ -687,7 +706,8 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
         if not chapters and r.story:
             good_ch = []
             for c in r.story:
-                g_ok, why = _item_ok(c.text, facts)
+                key = next(k for k, v in PAGE_NUM.items() if v == c.page)
+                g_ok, why = _chapter_ok(c.text, _evidence(items, PAGE_EVIDENCE[key] + ("driver",)) or facts, c.page)
                 if g_ok and c.text.strip():
                     good_ch.append({"text": c.text.strip(), "page": c.page})
                 else:
@@ -702,8 +722,8 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
             ev = _evidence(items, PAGE_EVIDENCE[k] + ("driver",)) or facts
             what_ev = _evidence(items, PAGE_WHAT[k]) or ev
             drv = _drivers_for(items, k)
-            checks = {"what": lambda x: _item_ok(x, what_ev), "todo": lambda x: _item_ok(x, facts),
-                      "back": lambda x: _item_ok(x, facts),
+            checks = {"what": lambda x: _item_ok(x, what_ev, 160), "todo": lambda x: _item_ok(x, facts, 220),
+                      "back": lambda x: _back_ok(x, facts),
                       "why": lambda x: _why_ok(x, drv, [f for c in drv for f in c.facts] + ev)}
             for part, check in checks.items():
                 key, val = f"{part}:{k}", getattr(st, part).strip()
@@ -897,7 +917,7 @@ def _brief_one(s: Settings, llm: LLM, freeze: bool, eng) -> None:
     news = news_items(eng, s.focal_company)
     print(f"{len(news)} headlines passed the news test for {s.focal_company}")
     r = generate(s, cands, llm, [c for c in items if c.type == "driver"])
-    n = narrate(s, items, llm, news)
+    n = narrate(s, items, llm, news, r.headline)
     bid = store(eng, s, r, freeze=freeze, n=n)
     print(f"PAGE NOTES + OPTIONS: {'checked' if n.check.passed and not n.fallback_used else 'TEMPLATE (AI text failed the check)'}"
           f" · {len(n.recommendations)} options" + (f" · wording flagged: {', '.join(n.flags)}" if n.flags else ""))
