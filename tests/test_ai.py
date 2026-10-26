@@ -274,7 +274,8 @@ def test_why_may_say_mostly_because_only_where_the_arithmetic_does():
     assert not _why_ok("Margin fell 1.1 pp, mostly because of weak demand.", d, facts)[0]       # other cause
     assert not _why_ok("Margin fell 1.1 pp, mostly because fuel took 7.4 pp.", [_driver("partly")], facts)[0]
     assert not _why_ok("Margin fell because of fuel.", [_driver("mixed", "")], facts)[0]       # no single driver
-    assert _why_ok("Margin fell 1.1 pp with no single driver.", [_driver("mixed", "")], facts)[0]
+    assert _why_ok("Margin fell 1.1 pp with no single driver: fuel and other costs moved in opposite ways.", [_driver("mixed", "")], facts)[0]
+    assert not _why_ok("Operating margin fell 1.1 pp in Q3 2026.", d, facts)[0]                 # names no driver
 
 
 def test_page_story_news_must_match_the_page_topic_and_is_written_by_code():

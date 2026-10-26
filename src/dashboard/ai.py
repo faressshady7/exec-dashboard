@@ -177,6 +177,10 @@ class Round3(BaseModel):
 
 
 PAGE_NUM = {"page_briefing": 1, "page_peers": 2, "page_risks": 3, "page_whatif": 4, "page_detail": 5}
+# the numbers a page's "what happened" may use = what that page's charts show
+PAGE_WHAT = {"page_briefing": ("market_position", "exposure", "peer_gap", "trend", "change_point", "driver"),
+             "page_peers": ("peer_gap", "valuation"), "page_risks": ("exposure",), "page_whatif": ("scenario",),
+             "page_detail": ("trend", "change_point", "driver")}
 # which calculated 'why' each page explains
 PAGE_DRIVER = {"page_briefing": ("operating_margin_pct", "operating_income"), "page_peers": ("operating_margin_pct",),
                "page_risks": ("operating_margin_pct", "operating_income"), "page_whatif": ("operating_income",),
@@ -361,20 +365,26 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "", news: 
     return (f"Write the story layer of {company}'s executive dashboard. The reader is a busy executive: every line must be "
             f"short, plain and answer something. An INSIGHT is a comparison (vs the peer airlines, vs a year earlier, or vs "
             f"quarterly profit). Never describe a chart ('the chart shows').\n\n"
-            f"1. story: 3-4 chapters for page 1, in the order that matters most TODAY. Each chapter: one short sentence "
-            f"with a number, and the page (2-5) that explains it. Together they tell one story.\n\n"
+            f"1. story: 3-4 chapters for page 1 that read as ONE connected story, in the order that matters most TODAY, "
+            f"each pointing to a DIFFERENT page (2-5). Typical arc: what changed (the main problem) -> why (from a "
+            f"calculated why) -> how big the risk is -> how we compare or what could happen next. Each chapter: one "
+            f"sentence of at most 18 words with a number; link them ('That is mostly...', 'So...', 'Against peers...'). "
+            f"Do not just list prices.\n\n"
             f"2. A page story for EACH page. Each page answers its own question:\n"
             + "\n".join(pages) + "\n"
             f"   - back: one short phrase linking to the story so far (e.g. 'Page 1 showed fuel is the main pressure.'); "
             f"empty on page 1.\n"
-            f"   - what: the answer to the page's question, one sentence, one number.\n"
+            f"   - what: the answer to the page's question, one sentence, one number, from that page's own charts "
+            f"(page 3: how much a fuel or rate move changes quarterly operating income; page 4: the effect of past "
+            f"episodes; page 2: the gap vs peers; page 5: how the KPIs moved).\n"
             f"   - why: one sentence from the page's 'why' insights (calculated by code). Say 'mostly because' ONLY when "
             f"that insight's summary says 'mostly because', and name the same driver. If it says 'no single driver' or "
             f"'cancelled out', say that instead. Never give any other cause.\n"
             f"   - news_id: the id of ONE headline below whose topic is allowed for this page, or empty. Do not write the "
             f"headline yourself; it is shown as written, with its source and date.\n"
-            f"   - todo: one thing to look at or consider, naming the page with the evidence, with its trade-off. Not "
-            f"investment advice.\n"
+            f"   - todo: one thing to look at or consider, naming the page with the evidence, with its trade-off. Only "
+            f"what the facts support: never mention hedges, contracts, plans or positions that are not in the facts. "
+            f"Not investment advice.\n"
             f"   - next_page: the next chapter of today's story (1-5, not this page).\n\n"
             f"3. Chart stories. For EACH chart below, using its evidence insights first:\n"
             f"   - title: the takeaway as a short statement with a number that names what the chart measures "
@@ -595,13 +605,17 @@ def _why_ok(text_: str, drivers: list[Insight], facts: list[Fact]) -> tuple[bool
     good, why = _item_ok(text_, facts)
     if not good:
         return good, why
+    low = text_.lower()
+    parts = {f.id.split(".")[2] for c in drivers for f in c.facts if f.id.count(".") == 2 and f.id.split(".")[2] in DRIVER_WORDS}
+    if parts and not any(w in low for d in parts for w in DRIVER_WORDS[d]):
+        return False, "does not say what drove the change (name fuel, other costs, revenue, cash flow, capex or debt)"
     if not CAUSE.search(text_):
         return True, ""
     backed = [(s, d) for s, d in map(_strength, drivers) if s in ("mostly", "partly") and d]
     if not backed:
         return False, "gives a cause, but the calculated breakdown shows no single driver"
     low = text_.lower()
-    named = [(s, d) for s, d in backed if any(w in low for w in DRIVER_WORDS.get(d, (d,)))]
+    named = [(s, d) for s, d in backed if any(w in low for w in DRIVER_WORDS.get(d, (d,)))]  # noqa: E501
     if not named:
         return False, f"names a cause other than the calculated driver ({', '.join(d for _, d in backed)})"
     if STRONG.search(text_) and not any(s == "mostly" for s, _ in named):
@@ -678,14 +692,17 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
                     good_ch.append({"text": c.text.strip(), "page": c.page})
                 else:
                     rejected.append(f"story chapter '{c.text[:40]}' ({why or 'empty'})")
-            if len(good_ch) >= 2:
+            if len({c["page"] for c in good_ch}) < len(good_ch):
+                rejected.append("story (each chapter must point to a different page)")
+            elif len(good_ch) >= 2:
                 chapters = good_ch
         # ---- page stories
         for k in PAGES:
             st = getattr(r, k)
             ev = _evidence(items, PAGE_EVIDENCE[k] + ("driver",)) or facts
+            what_ev = _evidence(items, PAGE_WHAT[k]) or ev
             drv = _drivers_for(items, k)
-            checks = {"what": lambda x: _item_ok(x, ev), "todo": lambda x: _item_ok(x, facts),
+            checks = {"what": lambda x: _item_ok(x, what_ev), "todo": lambda x: _item_ok(x, facts),
                       "back": lambda x: _item_ok(x, facts),
                       "why": lambda x: _why_ok(x, drv, [f for c in drv for f in c.facts] + ev)}
             for part, check in checks.items():

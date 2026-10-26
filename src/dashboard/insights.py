@@ -387,7 +387,11 @@ def outlet_name(domain: str) -> str:
     """reuters.com -> Reuters, finance.yahoo.com -> Yahoo Finance-style readable name."""
     known = {"wsj.com": "WSJ", "ft.com": "FT", "cnbc.com": "CNBC", "apnews.com": "AP", "bbc.com": "BBC",
              "cnn.com": "CNN", "npr.org": "NPR", "nytimes.com": "New York Times", "finance.yahoo.com": "Yahoo Finance",
-             "businessinsider.com": "Business Insider", "aviationweek.com": "Aviation Week", "ainonline.com": "AIN"}
+             "businessinsider.com": "Business Insider", "aviationweek.com": "Aviation Week", "ainonline.com": "AIN",
+             "aol.com": "AOL", "economictimes.indiatimes.com": "Economic Times", "business-standard.com": "Business Standard",
+             "simpleflying.com": "Simple Flying", "thenationalnews.com": "The National", "marketwatch.com": "MarketWatch",
+             "usatoday.com": "USA Today", "latimes.com": "LA Times", "washingtonpost.com": "Washington Post",
+             "theguardian.com": "The Guardian", "flightglobal.com": "FlightGlobal", "travelweekly.com": "Travel Weekly"}
     d = (domain or "").lower().removeprefix("www.")
     return known.get(d, d.split(".")[0].replace("-", " ").title() if d else "News")
 
