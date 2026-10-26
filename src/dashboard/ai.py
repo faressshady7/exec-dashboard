@@ -592,6 +592,8 @@ def _drivers_for(items: list[Insight], page: str) -> list[Insight]:
     return [c for c in items if c.type == "driver" and c.id.split(":", 1)[1] in PAGE_DRIVER[page]]
 
 
+DOWN_MINUS = re.compile(r"\b((?:fell|dropped|declined|decreased|took|cuts?|cutting|reduces?|reducing|lowers?|lowering|lost|loses)"
+                        r"\b[^.\d\-\u2212]{0,30}?(?:by\s+)?(?:about\s+|around\s+|roughly\s+)?)[-\u2212](\$?\d)", re.IGNORECASE)
 QUOTED_NUM = re.compile(r"[\"\u201c\u201d']([-\u2212+]?\$?\d[\d.,]*\s?(?:%|pp|bp|[MBK]\b|/gal)?)[\"\u201c\u201d']")
 
 
@@ -606,7 +608,12 @@ def _unquote(obj):
         return [_unquote(x) for x in obj]
     if isinstance(obj, dict):
         return {k: _unquote(v) for k, v in obj.items()}
-    return QUOTED_NUM.sub(r"\1", obj) if isinstance(obj, str) else obj
+    if not isinstance(obj, str):
+        return obj
+    obj = QUOTED_NUM.sub(r"\1", obj)
+    # 'fell -$354M' / 'cuts it by -$417M': the direction word already carries the sign, so drop the minus.
+    # Only for DOWN words; 'rose -$354M' stays and is rejected (the direction itself would be wrong).
+    return DOWN_MINUS.sub(lambda m: m.group(1) + m.group(2), obj)
 
 
 def _metric(c: Insight) -> str:

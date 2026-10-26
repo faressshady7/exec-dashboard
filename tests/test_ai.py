@@ -425,6 +425,15 @@ def test_quoted_numbers_are_unquoted_and_sign_checked():
     from dashboard.ai import Chapter, _item_ok, _unquote
     from dashboard.insights import Fact
     c = _unquote(Chapter(text='So a 10% rise cuts income by "-$417M".', page=3))
-    assert c.text == "So a 10% rise cuts income by -$417M."
-    assert not _item_ok(c.text, [Fact("x", "impact", -417e6, "USD")])[0]
-    assert not _item_ok("Fuel took -7.4 pp of margin.", [Fact("y", "fuel part", -7.4, "pp")])[0]
+    assert c.text == "So a 10% rise cuts income by $417M."               # quotes and the extra minus removed
+    assert _item_ok(c.text, [Fact("x", "impact", -417e6, "USD")])[0]
+    assert not _item_ok("Fuel took -7.4 pp of margin.", [Fact("y", "fuel part", -7.4, "pp")])[0]   # untidied text is still caught
+
+
+def test_down_word_minus_is_tidied_but_rose_minus_is_not():
+    from dashboard.ai import Chapter, _unquote
+    t = lambda x: _unquote(Chapter(text=x, page=3)).text
+    assert t("Net debt fell -$354M in Q3 2026.") == "Net debt fell $354M in Q3 2026."
+    assert t("A 10% rise reduces quarterly operating income by about -$417M.") == "A 10% rise reduces quarterly operating income by about $417M."
+    assert t("Fuel cost took -7.4 pp of margin.") == "Fuel cost took 7.4 pp of margin."
+    assert t("Net debt rose -$354M.") == "Net debt rose -$354M."
