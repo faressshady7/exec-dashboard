@@ -968,6 +968,9 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
         recs = [x.model_dump() for x in tmpl.recommendations]
     if len(chapters) >= 3 and _same_point(chapters[0]["text"], headline):
         chapters = chapters[1:]                  # step 1 only repeated the headline shown right above it
+    if chapters and CONNECTOR.match(chapters[0]["text"]):    # the story never opens with 'That is' / 'So'
+        t0_ = CONNECTOR.sub("", chapters[0]["text"]).strip()
+        chapters[0] = dict(chapters[0], text=t0_[:1].upper() + t0_[1:])
     start = (chapters[0]["page"], chapters[0]["text"]) if chapters else None
     n_parts = sum(f"{p}:{k}" in ok for k in PAGES for p in ("what", "why"))
     ai_recs = 0 if recs and recs[0]["title"].startswith("No AI") else len(recs)
