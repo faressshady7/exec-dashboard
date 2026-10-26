@@ -726,6 +726,13 @@ PEER_WORDS = re.compile(r"\b(peers?|rank\w*|among|first|last|ahead of|behind)\b|
 QUARTER = re.compile(r"\bQ[1-4] 20\d\d\b")
 
 
+def _same_point(a: str, b: str) -> bool:
+    """True when a step repeats the headline: the same numbers (ignoring quarters and years)."""
+    nums = lambda t: set(re.findall(r"\d[\d.,]*", YEAR_OR_QUARTER.sub(" ", t or "")))
+    na, nb = nums(a), nums(b)
+    return bool(na) and na <= nb
+
+
 def _tidy_chapter(t: str) -> str:
     """Steps read as sentences: 'UAL Free Cash Flow Reaches $267M' -> 'UAL free cash flow reaches $267M', and
     'Against peers,' is dropped when the sentence then compares nothing with the peers."""
@@ -929,6 +936,8 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
     captions = {k: ok[f"caption:{k}"] for k in CHARTS if f"caption:{k}" in ok}
     if not recs:
         recs = [x.model_dump() for x in tmpl.recommendations]
+    if len(chapters) >= 3 and _same_point(chapters[0]["text"], headline):
+        chapters = chapters[1:]                  # step 1 only repeated the headline shown right above it
     start = (chapters[0]["page"], chapters[0]["text"]) if chapters else None
     n_parts = sum(f"{p}:{k}" in ok for k in PAGES for p in ("what", "why", "todo"))
     ai_recs = 0 if recs and recs[0]["title"].startswith("No AI") else len(recs)

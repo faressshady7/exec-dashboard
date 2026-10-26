@@ -451,3 +451,10 @@ def test_chapters_are_tidied():
         "UAL free cash flow reaches $267M, ranking 1 among peers (Q2 2026)."
     assert _tidy_chapter("Against peers, DAL net debt fell to $9.06B in Q3 2026.") == "DAL net debt fell to $9.06B in Q3 2026."
     assert _tidy_chapter("Against peers, AAL operating margin ranks 3 of 3 at 2.7% (Q2 2026).").startswith("Against peers")
+
+
+def test_step_repeating_the_headline_is_detected():
+    from dashboard.ai import _same_point
+    h = "UAL free cash flow reaches $267M, ranking 1 of 3 among peers (Q2 2026)"
+    assert _same_point("UAL free cash flow reaches $267M, ranking 1 of 3 among peers in Q2 2026.", h)
+    assert not _same_point("A 10% rise in jet fuel reduces quarterly operating income by $417M.", h)
