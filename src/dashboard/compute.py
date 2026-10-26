@@ -255,7 +255,7 @@ def drivers(fin: pd.DataFrame) -> pd.DataFrame:
             try:
                 vn, vb, unit, parts = _parts(kpi, now, before)
             except (KeyError, ZeroDivisionError, TypeError, ValueError) as e:
-                print(f"::notice title=Why {t} {kpi}::not explained - {type(e).__name__}: {str(e)[:80]}")
+                print(f"Why {t} {kpi}: not explained - {type(e).__name__}: {str(e)[:80]}")
                 continue
             if any(pd.isna(v) for v in [vn, vb, *parts.values()]):
                 need = {"operating_margin_pct": ["revenue", "fuel_expense", "operating_expenses", "operating_income"],
@@ -263,7 +263,7 @@ def drivers(fin: pd.DataFrame) -> pd.DataFrame:
                         "free_cash_flow": ["operating_cash_flow", "capex"], "net_debt": ["total_debt", "liquidity"]}[kpi]
                 miss = [f"{c} {q}" for c in need for r, q in ((now, now["quarter_label"]), (before, before["quarter_label"]))
                         if c not in r or pd.isna(r[c])]
-                print(f"::notice title=Why {t} {kpi}::not explained - missing {', '.join(miss)}")
+                print(f"Why {t} {kpi}: not explained - missing {', '.join(miss)}")
                 continue
             change = vn - vb
             ranked = sorted(parts.items(), key=lambda kv: -abs(kv[1]))
@@ -597,8 +597,9 @@ def run(s: Settings, eng: Engine) -> dict[str, pd.DataFrame]:
     from dashboard.attention import attention
     out["attention"] = attention(kpis, pg, snap, sens, out["valuation"], s)
     out["driver"] = drivers(fin)
-    for (t, k), g in out["driver"].groupby(["ticker", "kpi"]) if not out["driver"].empty else []:
-        print(f"::notice title=Why {t} {k}::{driver_sentence(g)}")
+    # one annotation per company (GitHub shows at most 10 per step)
+    for t, gt in out["driver"].groupby("ticker") if not out["driver"].empty else []:
+        print(f"::notice title=Why {t}::" + " | ".join(driver_sentence(g) for _, g in gt.groupby("kpi")))
     from dashboard.bi import create_views, drop_views
     with eng.begin() as con:
         drop_views(con)                    # Power BI views sit on these tables; rebuilt right after
