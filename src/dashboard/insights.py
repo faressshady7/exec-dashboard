@@ -331,6 +331,72 @@ def scenario_insights(sc: pd.DataFrame, focal: str) -> list[Insight]:
                     sources=["gold.scenario (historical)"])]
 
 
+def driver_insights(drv: pd.DataFrame, focal: str) -> list[Insight]:
+    """The calculated 'why' (gold.driver): one insight per KPI, its summary written by code.
+    `group` carries the strength (mostly / partly / mixed / unchanged) and the main driver, so the
+    checker can allow 'mostly because <driver>' only where the arithmetic supports it."""
+    from dashboard.compute import driver_sentence
+    if drv.empty or focal not in set(drv["ticker"]):
+        return []
+    out = []
+    for kpi, g in drv[drv["ticker"] == focal].groupby("kpi", sort=False):
+        g = g.sort_values("rank")
+        r, unit = g.iloc[0], g.iloc[0]["unit"]
+        kpi_unit = "%" if unit == "pp" else "USD"
+        facts = [Fact(f"why.{kpi}.now", f"{focal} {r['label']} {r['quarter_label']}", r["value_now"], kpi_unit),
+                 Fact(f"why.{kpi}.before", f"{focal} {r['label']} {r['compared_with']}", r["value_before"], kpi_unit),
+                 Fact(f"why.{kpi}.change", f"{r['label']} change vs a year earlier", r["change"], unit)]
+        facts += [Fact(f"why.{kpi}.{x.driver}", f"Part of the change from {x.driver_label}", x.contribution, unit)
+                  for x in g[~g["noise"]].itertuples()]
+        main = g[g["is_main"]]
+        out.append(Insight(id=f"driver:{kpi}", type="driver", title=f"Why {r['label'].lower()} changed",
+                           summary=driver_sentence(g), facts=facts, significance=0.8, impact=0.9,
+                           group=f"{r['strength']}:{main.iloc[0]['driver'] if len(main) else ''}",
+                           sources=["gold.driver (exact split of the change, same quarter a year earlier)"]))
+    return out
+
+
+def news_items(eng: Engine, focal: str, days: int = 30, limit: int = 8) -> list[dict]:
+    """Headlines that PASSED the news test (silver), for this airline or the industry, newest first.
+    The AI may only pick one by id; the dashboard line ('In the news: ...') is written by code."""
+    q = text("""
+        SELECT n.title, n.domain, d.full_date, n.topic, n.url FROM gold.fact_news n
+        LEFT JOIN gold.dim_company c USING (company_key) JOIN gold.dim_date d USING (date_key)
+        WHERE n.usable AND (c.ticker = :t OR n.scope = 'industry')
+          AND d.full_date >= (SELECT max(full_date) FROM gold.dim_date) - :days
+        ORDER BY d.full_date DESC, n.tier LIMIT 40""")
+    try:
+        with eng.connect() as con:
+            rows = con.execute(q, {"t": focal, "days": days}).mappings().all()
+    except Exception:                                    # gold built before the news test existed
+        return []
+    seen, out = set(), []
+    for r in rows:
+        key = (r["title"] or "").lower()[:60]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append({"id": f"n{len(out) + 1}", "title": r["title"], "outlet": outlet_name(r["domain"]),
+                    "date": r["full_date"], "topic": r["topic"], "url": r["url"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
+def outlet_name(domain: str) -> str:
+    """reuters.com -> Reuters, finance.yahoo.com -> Yahoo Finance-style readable name."""
+    known = {"wsj.com": "WSJ", "ft.com": "FT", "cnbc.com": "CNBC", "apnews.com": "AP", "bbc.com": "BBC",
+             "cnn.com": "CNN", "npr.org": "NPR", "nytimes.com": "New York Times", "finance.yahoo.com": "Yahoo Finance",
+             "businessinsider.com": "Business Insider", "aviationweek.com": "Aviation Week", "ainonline.com": "AIN"}
+    d = (domain or "").lower().removeprefix("www.")
+    return known.get(d, d.split(".")[0].replace("-", " ").title() if d else "News")
+
+
+def news_line(item: dict) -> str:
+    d = pd.Timestamp(item["date"])
+    return f"In the news: {item['outlet']}, {d.day} {d.strftime('%b')}: \u201c{item['title']}\u201d"
+
+
 def narrative_facts(s: Settings, eng: Engine, cands: list[Insight]) -> list[Insight]:
     """Everything the page briefs and recommendations may cite: the ranked candidates + market view + scenarios."""
     extra = valuation_insights(_read(eng, "valuation"), s.focal_company) + scenario_insights(_read(eng, "scenario"), s.focal_company)
@@ -338,4 +404,8 @@ def narrative_facts(s: Settings, eng: Engine, cands: list[Insight]) -> list[Insi
     peers = [p for p in peer_insights(_read(eng, "peer_gap"), s.focal_company,
                                       {c.ticker: "; ".join(c.caveats) for c in s.companies})
              if p.id not in have and p.id in ("peer:operating_margin_pct", "peer:fuel_share_opex_pct")]
-    return cands + peers + extra             # the peer charts always have their own KPI as evidence
+    try:
+        drivers = driver_insights(_read(eng, "driver"), s.focal_company)
+    except Exception:                      # compute not rerun since drivers were added
+        drivers = []
+    return cands + peers + extra + drivers   # the peer charts always have their own KPI as evidence

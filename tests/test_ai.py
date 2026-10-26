@@ -169,7 +169,7 @@ def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
     terms = load_settings().ai.flag_terms
     assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
     assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
-    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v6"
+    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v7"
 
 
 
@@ -240,18 +240,63 @@ def test_brief_is_a_three_step_story_and_parts_are_kept():
 def test_captions_and_start_here_are_number_checked():
     from dashboard.ai import CHARTS, MockLLM, narrate, round3_prompt
     s = load_settings()
-    ok = dict(_round3("Fuel is $4.56/gal; trade-off: none."), start_page=3, start_reason="A 10% rise costs about $379M.",
+    story = [{"text": "A 10% fuel rise costs about $379M.", "page": 3}, {"text": "Jet fuel is $4.56/gal.", "page": 2}]
+    ok = dict(_round3("Fuel is $4.56/gal; trade-off: none."), story=story,
               captions={"jet_fuel": "Jet fuel is $4.56/gal today.", "fuel_exposure": "A 10% rise costs about $379M."})
     good = narrate(s, _narrative_items(), MockLLM(lambda p, schema: ok))
     assert not good.fallback_used and good.start_page == 3 and good.captions["jet_fuel"].startswith("Jet fuel")
+    assert [c["page"] for c in good.chapters] == [3, 2]          # v7: start here = first chapter of the story
     bad = dict(ok, captions={"jet_fuel": "Jet fuel is $9.99/gal today.",                 # invented number
                              "fuel_exposure": "A 10% rise costs about $379M."})
     res = narrate(s, _narrative_items(), MockLLM(lambda p, schema: bad))
-    # v5: only the bad caption is dropped (after one rewrite); the good caption and start-here stay
     assert "jet_fuel" not in res.captions and res.captions["fuel_exposure"].startswith("A 10%")
     assert res.start_reason and res.attempts == 2
     prompt = round3_prompt(_narrative_items(), "United Airlines")
-    assert "start_page" in prompt and all(k in prompt for k in CHARTS)
+    assert "story" in prompt and all(k in prompt for k in CHARTS)
+
+
+# ---------------------------------------------------------------- v7 page stories
+def _driver(strength="mostly", main="fuel"):
+    from dashboard.insights import Fact, Insight
+    return Insight(id="driver:operating_margin_pct", type="driver", title="Why operating margin changed",
+                   summary="Operating margin fell 1.1 pp (Q3 2026 vs Q3 2025), mostly because fuel cost took 7.4 pp.",
+                   facts=[Fact("why.operating_margin_pct.now", "UAL operating margin Q3 2026", 8.1, "%"),
+                          Fact("why.operating_margin_pct.change", "change", -1.1, "pp"),
+                          Fact("why.operating_margin_pct.fuel", "part from fuel", -7.4, "pp"),
+                          Fact("why.operating_margin_pct.other_costs", "part from other costs", 6.3, "pp")],
+                   significance=0.8, impact=0.9, group=f"{strength}:{main}")
+
+
+def test_why_may_say_mostly_because_only_where_the_arithmetic_does():
+    from dashboard.ai import _why_ok
+    d, facts = [_driver()], _driver().facts
+    assert _why_ok("Margin fell 1.1 pp, mostly because fuel cost took 7.4 pp.", d, facts)[0]
+    assert not _why_ok("Margin fell 1.1 pp, mostly because of weak demand.", d, facts)[0]       # other cause
+    assert not _why_ok("Margin fell 1.1 pp, mostly because fuel took 7.4 pp.", [_driver("partly")], facts)[0]
+    assert not _why_ok("Margin fell because of fuel.", [_driver("mixed", "")], facts)[0]       # no single driver
+    assert _why_ok("Margin fell 1.1 pp with no single driver.", [_driver("mixed", "")], facts)[0]
+
+
+def test_page_story_news_must_match_the_page_topic_and_is_written_by_code():
+    import datetime as dt
+    from dashboard.ai import MockLLM, narrate
+    s = load_settings()
+    items = _narrative_items() + [_driver()]
+    news = [{"id": "n1", "title": "Jet fuel jumps on refinery outages", "outlet": "Reuters", "date": dt.date(2026, 10, 22),
+             "topic": "fuel", "url": "https://x/1"},
+            {"id": "n2", "title": "Pilots vote to strike", "outlet": "Skift", "date": dt.date(2026, 10, 21),
+             "topic": "labour", "url": "https://x/2"}]
+    reply = dict(_round3("Fuel is $4.56/gal; trade-off: none."),
+                 page_risks={"back": "Page 1 showed fuel is the main pressure.", "what": "A 10% rise costs about $379M.",
+                             "why": "Margin fell 1.1 pp, mostly because fuel cost took 7.4 pp.", "news_id": "n1",
+                             "todo": "Check fuel options on page 4.", "next_page": 4},
+                 page_whatif={"what": "Shocks are estimated from past quarters.", "news_id": "n2"})   # labour not allowed here
+    res = narrate(s, items, MockLLM(lambda p, schema: reply), news)
+    r3 = res.stories["page_risks"]
+    assert r3["why"].startswith("Margin fell") and r3["next_page"] == 4 and r3["ai"]["why"]
+    assert r3["news"] == "In the news: Reuters, 22 Oct: \u201cJet fuel jumps on refinery outages\u201d"
+    assert "Pilots" not in res.stories["page_whatif"]["news"]
+    assert res.coverage["news"] >= 1
 
 
 # ---------------------------------------------------------------- time limits (daily run must finish)
