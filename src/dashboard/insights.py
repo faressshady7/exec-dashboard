@@ -221,7 +221,7 @@ def exposure_insights(sens: pd.DataFrame, focal: str) -> list[Insight]:
             id="exposure:jet_fuel", type="exposure", title="Exposure to jet fuel",
             summary=(f"Based on past quarters, a 10% rise in jet fuel is estimated to reduce {focal} quarterly operating income by about "
                      f"{fmt(abs(imp10), 'USD')}, against a base of {facts[1].display()}."
-                     + _caveat_text(fuel.get("caveat", pd.Series(dtype=str)).fillna("").to_dict(), fuel.index)),
+                     + _caveat_text(fuel.get("caveat", pd.Series(dtype=str)).fillna("").to_dict(), [focal])),   # only the focal airline's caveat
             facts=facts, significance=_clip(share * 2), impact=1.0,      # a 10% shock removing >=50% of profit = maximal
             sources=[f"Regression on {int(f['n_quarters'])} quarters, gold.sensitivity ({f['method']})"]))
     rate = sens[(sens["factor"] == "fed_funds") & (sens["ticker"] == focal)]

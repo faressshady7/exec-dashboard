@@ -143,7 +143,10 @@ def test_refinery_caveat_reaches_the_ai_text():
                      for t in ("UAL", "DAL", "AAL")], ignore_index=True)
     ins = exposure_insights(sensitivities(fin, market_frame(px), s), "UAL")
     fuel = next(i for i in ins if i.id == "exposure:jet_fuel")
-    assert "Caveat: Delta owns an oil refinery" in fuel.summary
+    assert "refinery" not in fuel.summary          # UAL's own estimate: Delta's refinery is irrelevant here
+    sens = sensitivities(fin, market_frame(px), s)
+    dal = next(i for i in exposure_insights(sens, "DAL") if i.id == "exposure:jet_fuel")
+    assert "Caveat: Delta owns an oil refinery" in dal.summary
     pg = pd.DataFrame([{"kpi": k, "ticker": t, "unit": "%", "gap_vs_peer_avg": 1.0, "peer_avg": 25.0,
                         "better": "lower", "value": 26.0, "label": "Fuel share of costs", "rank": 2,
                         "n_companies": 3, "quarter_label": "Q2 2026"}
