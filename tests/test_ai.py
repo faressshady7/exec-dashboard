@@ -485,3 +485,9 @@ def test_recency_lowers_older_quarter_insights():
                                 facts=[Fact(i, lab, 1.0, "%")])
     r = recency([mk("old", "UAL FCF (Q2 2026)"), mk("new", "UAL margin Q3 2026"), mk("mkt", "Jet fuel price")])
     assert r == {"old": 0.8, "new": 1.0, "mkt": 1.0}
+
+
+def test_period_names_are_not_figures():
+    from dashboard.ai import check_numbers
+    from dashboard.insights import Fact
+    assert check_numbers("Replaying the last 12 months costs $4.47B.", [Fact("x", "impact", -4.47e9, "USD")]).passed

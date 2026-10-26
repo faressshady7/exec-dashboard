@@ -431,6 +431,7 @@ def _candidates_for(f: Fact) -> list[float]:
 
 def check_numbers(brief: str, facts: list[Fact]) -> Check:
     stripped = YEAR_OR_QUARTER.sub(" ", brief)
+    stripped = re.sub(r"\b\d+[- ]months?\b", " ", stripped, flags=re.IGNORECASE)   # a period name ('last 12 months'), not a figure
     allowed = [x for f in facts for x in _candidates_for(f)]
     unmatched, found = [], 0
     for m in NUM.finditer(stripped):
