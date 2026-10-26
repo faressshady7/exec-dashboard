@@ -472,3 +472,8 @@ def test_what_to_do_is_code_written_and_follows_the_data():
     assert "Delta Air Lines' margin lead" in lead["page_peers"][0] and "cutting costs" not in lead["page_peers"][0]
     assert "American Airlines' margin gap" in behind["page_peers"][0] and "cutting costs" in behind["page_peers"][0]
     assert [v[1] for v in lead.values()] == [3, 4, 5, 1]            # always points to the next page
+
+
+def test_against_peers_with_only_a_time_comparison_is_dropped():
+    from dashboard.ai import _tidy_chapter
+    assert _tidy_chapter("Against peers, net debt fell $354M in Q3 2026 vs a year earlier.") == "Net debt fell $354M in Q3 2026 vs a year earlier."

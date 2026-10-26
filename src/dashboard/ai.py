@@ -767,7 +767,8 @@ def _tidy_chapter(t: str) -> str:
     'Against peers,' is dropped when the sentence then compares nothing with the peers."""
     t = _sentence_case(t)
     m = re.match(r"against peers,?\s+", t, re.IGNORECASE)
-    if m and not PEER_WORDS.search(t[m.end():]) and not re.search(r"\bvs\b|average", t[m.end():], re.IGNORECASE):
+    rest = re.sub(r"\bvs\.?\s+(a year earlier|the previous quarter|Q[1-4] 20\d\d)", "", t[m.end():] if m else "", flags=re.IGNORECASE)
+    if m and not PEER_WORDS.search(rest) and not re.search(r"\bvs\b|average", rest, re.IGNORECASE):
         t = t[m.end():]
         t = t[:1].upper() + t[1:]
     return t
