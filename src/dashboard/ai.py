@@ -542,6 +542,10 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
             if not w_ok:
                 chk = Check(False, chk.numbers_found, [f"why: {w_why}"])
         draft.headline = _sentence_case(draft.headline)
+        if chk.passed and draft.resolution.strip():          # no invented hedges / contracts in the resolution
+            r_ok, r_why = _todo_ok(draft.resolution, facts)
+            if not r_ok:
+                chk = Check(False, chk.numbers_found, [f"resolution: {r_why}"])
         if chk.passed and not _peer_quarter_ok(draft.headline):
             pq = _peer_quarter(cands)
             if pq:                                   # code adds the quarter rather than failing a good headline
