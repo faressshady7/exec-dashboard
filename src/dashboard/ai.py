@@ -389,10 +389,7 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "", news: 
             f"'cancelled out', say that instead. Never give any other cause.\n"
             f"   - news_id: the id of ONE headline below whose topic is allowed for this page, or empty. Do not write the "
             f"headline yourself; it is shown as written, with its source and date.\n"
-            f"   - todo: one thing to look at or consider, naming the page with the evidence, with its trade-off. Only "
-            f"what the facts support: never mention hedges, contracts, plans or positions that are not in the facts. "
-            f"Not investment advice.\n"
-            f"   - next_page: the next chapter of today's story (1-5, not this page).\n\n"
+            f"   - todo and next_page: leave empty (written by code).\n\n"
             f"3. Chart stories. For EACH chart below, using its evidence insights first:\n"
             f"   - title: the takeaway as a short statement with a number that names what the chart measures "
             f"(an action title, not a label), e.g. 'United loses most if fuel rises: $379M a quarter';\n"
@@ -743,6 +740,28 @@ def _sentence_case(t: str) -> str:
     return t
 
 
+def code_todos(items: list[Insight], company: str) -> dict[str, tuple[str, int]]:
+    """v8: 'What to do' is written by code, not by the AI (the AI's lines kept pointing at the page the reader was
+    already on, with trade-offs that were not trade-offs). One fixed sentence per page, each pointing to the NEXT
+    page, with wording chosen by the data where it matters (a margin lead vs a margin gap). Page 1 has none."""
+    name = re.sub(r"(,)?( Holdings,?| Group)? Inc\.?$", "", company).strip()
+    gap = next((f.value for c in items if c.id == "peer:operating_margin_pct" for f in c.facts
+                if f.id == "peer.operating_margin_pct.gap"), None)
+    if gap is not None and gap < 0:
+        peers = (f"If {name}'s margin gap to its peers matters, examine its fuel exposure on page 3 before acting; "
+                 f"cutting costs too fast could affect operating capacity.")
+    else:
+        peers = (f"Before relying on {name}'s margin lead, check on page 3 how much a fuel rise could take away "
+                 f"from it.")
+    return {"page_peers": (peers, 3),
+            "page_risks": ("Test larger fuel-price and interest-rate moves on page 4 before making operating decisions; "
+                           "the estimates depend on the assumptions listed there.", 4),
+            "page_whatif": (f"Treat these as scenarios, not forecasts; review {name}'s financial position on page 5 "
+                            f"before deciding how much risk it can absorb.", 5),
+            "page_detail": ("Use these trends to decide what to look into next, not as proof of their causes; "
+                            "the briefing on page 1 sums up today's story.", 1)}
+
+
 def _tidy_chapter(t: str) -> str:
     """Steps read as sentences: 'UAL Free Cash Flow Reaches $267M' -> 'UAL free cash flow reaches $267M', and
     'Against peers,' is dropped when the sentence then compares nothing with the peers."""
@@ -878,6 +897,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
                       "back": lambda x: _back_ok(x, facts),
                       "why": lambda x: _why_ok(x, _same_metric(drv, ok.get(f"what:{k}", st.what)),
                                                [f for c in drv for f in c.facts] + ev)}
+            checks.pop("todo")                        # v8: 'what to do' is written by code (code_todos)
             for part, check in checks.items():
                 key, val = f"{part}:{k}", getattr(st, part).strip()
                 if key in ok or not val:
@@ -928,6 +948,7 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
             break
         feedback = "; ".join(rejected)
     # ---- assemble: AI text where it passed, computed text where it did not
+    todo_fixed = code_todos(items, company)
     stories, pages = {}, {}
     for k in PAGES:
         t_st = getattr(tmpl, k)
@@ -935,8 +956,9 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
         n = by_id.get(nid)
         st = {"back": ok.get(f"back:{k}", ""), "what": ok.get(f"what:{k}", t_st.what),
               "why": ok.get(f"why:{k}", t_st.why), "news": news_line(n) if n else "", "news_url": n["url"] if n else "",
-              "todo": ok.get(f"todo:{k}", ""), "next_page": ok.get(f"next:{k}", t_st.next_page),
-              "ai": {p: f"{p}:{k}" in ok for p in ("back", "what", "why", "news", "todo")}}
+              "todo": todo_fixed[k][0] if k in todo_fixed else ok.get(f"todo:{k}", ""),
+              "next_page": todo_fixed[k][1] if k in todo_fixed else ok.get(f"next:{k}", t_st.next_page),
+              "ai": {p: f"{p}:{k}" in ok and not (p == "todo" and k in todo_fixed) for p in ("back", "what", "why", "news", "todo")}}
         stories[k] = st
         pages[k] = " ".join(x for x in (st["what"], st["why"]) if x)       # older dashboards: one note per page
     titles = {k: ok[f"title:{k}"] for k in CHARTS if f"title:{k}" in ok}
@@ -946,15 +968,16 @@ def narrate(s: Settings, items: list[Insight], llm: LLM, news: list[dict] | None
     if len(chapters) >= 3 and _same_point(chapters[0]["text"], headline):
         chapters = chapters[1:]                  # step 1 only repeated the headline shown right above it
     start = (chapters[0]["page"], chapters[0]["text"]) if chapters else None
-    n_parts = sum(f"{p}:{k}" in ok for k in PAGES for p in ("what", "why", "todo"))
+    n_parts = sum(f"{p}:{k}" in ok for k in PAGES for p in ("what", "why"))
     ai_recs = 0 if recs and recs[0]["title"].startswith("No AI") else len(recs)
     coverage = {"still_rejected": "; ".join(last_rejected)[:700] if used else "no valid answer",
-                "story": len(chapters), "page_parts": f"{n_parts}/{3 * len(PAGES)}",
+                "story": len(chapters), "page_parts": f"{n_parts}/{2 * len(PAGES)}",
                 "news": sum(f"news:{k}" in ok for k in PAGES), "titles": f"{len(titles)}/{len(CHARTS)}",
                 "captions": f"{len(captions)}/{len(CHARTS)}", "options": ai_recs,
                 "pages": f"{sum(f'what:{k}' in ok for k in PAGES)}/{len(PAGES)}", "start_here": start is not None}
     # flags: cause words in a CHECKED 'why' are backed by arithmetic; flag them elsewhere only
-    flag_text = " ".join([st["what"] + " " + st["todo"] + " " + st["back"] for st in stories.values()]
+    flag_text = " ".join([st["what"] + " " + (st["todo"] if st["ai"]["todo"] else "") + " " + st["back"]   # code todos: fixed text
+                          for st in stories.values()]
                          + list(titles.values()) + list(captions.values()) + [c["text"] for c in chapters]
                          + [f"{x['title']} {x['detail']}" for x in recs])
     kept = flag_text + " " + " ".join(st["why"] for st in stories.values())
