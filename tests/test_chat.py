@@ -378,3 +378,35 @@ def test_chat_page_needs_the_password_when_set(monkeypatch):
     monkeypatch.setattr("dashboard.chat.chat_engine", lambda: (_ for _ in ()).throw(AssertionError("must not connect")))
     at = _app().run()
     assert not at.exception and len(at.text_input) == 1 and not at.chat_input
+
+
+# --------------------------------------------------------------------------- one-time setup script
+def test_chat_url_keeps_the_server_and_swaps_the_user():
+    from dashboard.chat_setup import chat_url
+    u = chat_url("postgresql://postgres.abcref:adminpw@aws-0-eu.pooler.supabase.com:5432/postgres", "NEWPW1")
+    assert u == "postgresql+psycopg://chat_reader.abcref:NEWPW1@aws-0-eu.pooler.supabase.com:5432/postgres"
+    assert "adminpw" not in u
+    assert chat_url("postgresql+psycopg://postgres@/db?host=/tmp", "x").startswith("postgresql+psycopg://chat_reader:x@")
+
+
+@pytest.mark.skipif(not DB, reason="set TEST_DATABASE_URL to run database tests")
+def test_setup_creates_the_account_and_can_run_again(tmp_path):
+    from sqlalchemy import create_engine, text
+    from dashboard.chat_setup import check, set_env, setup
+    admin = create_engine(DB)
+    with admin.begin() as con:
+        con.execute(text("DROP SCHEMA IF EXISTS bi CASCADE; DROP SCHEMA IF EXISTS gold CASCADE; DROP SCHEMA IF EXISTS ai CASCADE"))
+        con.execute(text("DO $$ BEGIN IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname='chat_reader') THEN "
+                         "DROP OWNED BY chat_reader; DROP ROLE chat_reader; END IF; END $$"))
+        con.execute(text("CREATE SCHEMA gold; CREATE TABLE gold.dim_company (x int); CREATE SCHEMA bi; "
+                         "CREATE VIEW bi.companies AS SELECT x FROM gold.dim_company"))
+    url1 = setup(DB)
+    assert check(url1) == ["OK   reads the dashboard views (1 visible)", "OK   blocked: gold.dim_company", "OK   blocked: ai.chat"]
+    url2 = setup(DB)                                         # second run: ALTER instead of CREATE, new password
+    assert url1 != url2 and check(url2)[0].startswith("OK")
+    env = tmp_path / ".env"
+    env.write_text("DATABASE_URL=x\nCHAT_DATABASE_URL=old\n")
+    set_env("CHAT_DATABASE_URL", "new", env)
+    assert env.read_text() == "DATABASE_URL=x\nCHAT_DATABASE_URL=new\n"
+    with admin.begin() as con:
+        con.execute(text("DROP SCHEMA bi CASCADE; DROP SCHEMA ai CASCADE; DROP SCHEMA gold CASCADE; DROP OWNED BY chat_reader; DROP ROLE chat_reader"))

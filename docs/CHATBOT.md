@@ -65,33 +65,19 @@ in an official text the tools returned (a 10-K/10-Q passage, or the already-chec
 | Using up the free AI quota | Optional password, 6 questions/minute, 40 per session | operational (no paper) |
 | Admin account used by mistake | The chat page refuses to start with the `postgres` account | design |
 
-## Setup (once, about 15 minutes)
+## Setup (once, about 2 minutes)
 
-### 1. Create the chatbot's database account
-Supabase → SQL Editor → New query → paste `sql/chat_reader_role.sql` → replace `CHANGE-ME` with a
-long random password (letters and digits) → **Run**. The daily pipeline re-grants the views every morning.
+1. Double-click `scripts\setup_chat.bat`. It creates the read-only account `chat_reader` with a random
+   password (using your admin `DATABASE_URL` once), saves `CHAT_DATABASE_URL` in `.env`, checks the
+   account can read only the dashboard views, and asks for your Finnhub key. Run it again any time to
+   give the account a new password. (Manual alternative: run `sql/chat_reader_role.sql` in the Supabase
+   SQL Editor and write the `CHAT_DATABASE_URL` line yourself.)
+2. GitHub secret for the daily news download: repo -> Settings -> Secrets and variables -> Actions ->
+   New repository secret `FINNHUB_API_KEY`.
+3. Double-click `scripts\run_chat.bat` (opens http://localhost:8501; keep the window open).
+4. In Power BI, Ctrl + click "Ask AI about this page" (plain click in reading view).
 
-### 2. Add to `.env` (laptop)
-```
-CHAT_DATABASE_URL=postgresql://chat_reader.YOUR-PROJECT-REF:THE-PASSWORD@aws-0-YOUR-REGION.pooler.supabase.com:5432/postgres
-FINNHUB_API_KEY=your-finnhub-key          (or run scripts\set_finnhub_key.bat)
-CHAT_PASSWORD=                            (optional)
-```
-Copy your existing `DATABASE_URL` line and change only the user name (`postgres.` → `chat_reader.`)
-and the password.
-
-### 3. GitHub secret (for the daily news download)
-Repo → Settings → Secrets and variables → Actions → New repository secret:
-`FINNHUB_API_KEY` = your Finnhub key. The daily run (`.github/workflows/daily.yml`) already passes it on; if your copy on GitHub lacks it, add this line
-under `env:` next to `FMP_API_KEY`:
-```yaml
-      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
-```
-
-### 4. Start the chat page
-Double-click `scripts\run_chat.bat`. It opens http://localhost:8501. Keep the window open.
-
-### 5. The Power BI button (each page)
+### The Power BI button (already added to every page)
 1. **Modeling → New measure** (one per page; change the page number):
    ```DAX
    Chat Link P1 = "http://localhost:8501/?company=" & SELECTEDVALUE ( companies[ticker], "UAL" ) & "&page=1"

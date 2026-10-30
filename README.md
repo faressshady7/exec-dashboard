@@ -39,7 +39,7 @@ Runs automatically every day on GitHub Actions (06:17 Cairo, backup run 08:47), 
 | `docs/GITHUB_SETUP.md` | How the daily GitHub run and its secrets are set up. |
 | `docs/CHATBOT.md` | The chatbot: how it answers, security, setup, the Power BI button. |
 | `sql/chat_reader_role.sql` | One-time Supabase script: the chatbot's read-only database account. |
-| `scripts/` | Windows double-click launchers: run everything, the chat page, the news audit, save API keys. |
+| `scripts/` | Windows double-click launchers: run everything, chat setup and the chat page, the news audit, save API keys. |
 | `.github/workflows/daily.yml` | The daily automatic run. |
 | `.env` (laptop only, never uploaded) | Passwords and API keys. |
 | `data/`, `logs/` (laptop only) | Raw downloads and the output of the last local run. |
