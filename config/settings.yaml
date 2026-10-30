@@ -54,6 +54,18 @@ news:
   max_articles: 250        # per query (GDELT max). Only ~7% of raw hits are really about the company.
   language: english
   industry_terms: ["jet fuel", "airline industry", "airfares"]
+  # Second news source: Finnhub company news (free key in .env as FINNHUB_API_KEY; skipped if missing).
+  # Narrower than GDELT but each article comes with a short SUMMARY, which the chatbot can quote.
+  # Tested 30 Oct 2026 on the free plan: 32 UAL articles in 7 days, all with a summary
+  # (Yahoo 22, Benzinga 6, CNBC 2, SeekingAlpha 1, ChartMill 1); 15 of 32 were about United.
+  finnhub: true
+  # Finnhub names the outlet, not its web address -> map to the domain so the same tier rules apply
+  finnhub_sources: {Yahoo: finance.yahoo.com, CNBC: cnbc.com, Reuters: reuters.com, MarketWatch: marketwatch.com,
+                    Bloomberg: bloomberg.com, WSJ: wsj.com, Benzinga: benzinga.com, SeekingAlpha: seekingalpha.com,
+                    ChartMill: chartmill.com, Forbes: forbes.com, "Business Insider": businessinsider.com}
+  # A summary shorter than this, or containing one of these phrases, is not a summary -> stored as empty
+  summary_min_chars: 60
+  summary_boilerplate: ["for questions about this article", "email help@", "click here to", "subscribe to"]
 
 # News filter (silver). Raw articles are all kept in bronze; silver TAGS each one.
 # Criteria for the tiers (judgement, documented): established editorial standards and a
@@ -332,3 +344,16 @@ stocks:
   source: fmp
   history_years: 5
   index_years: 3
+
+# Chatbot (ask questions about the dashboard page). Answers come from fixed, read-only data tools
+# (KPIs, peers, market risks, what-if, valuation, news, 10-K/10-Q text); every number is checked.
+# Questions with no answer in the data get general knowledge, labelled and without numbers.
+chat:
+  model: null                # null = same model as ai.model
+  max_rounds: 4              # tool-calling rounds per question
+  history_turns: 4           # earlier questions sent along, so follow-up questions work
+  max_question_chars: 600
+  max_per_minute: 6          # per chat session (protects the free Gemini quota)
+  max_per_session: 40
+  news_days: 30
+  search_results: 5          # 10-K/10-Q passages per text search

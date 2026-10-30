@@ -109,6 +109,10 @@ class NewsSettings(BaseModel):
     max_articles: int = Field(default=100, ge=1, le=250)    # GDELT max per request
     language: str = "english"
     industry_terms: list[str] = []
+    finnhub: bool = True                                   # second source with article summaries
+    finnhub_sources: dict[str, str] = {}                   # Finnhub outlet name -> domain (for tiers)
+    summary_min_chars: int = Field(default=60, ge=0)
+    summary_boilerplate: list[str] = []
 
 
 class AISettings(BaseModel):
@@ -193,6 +197,18 @@ class StockSettings(BaseModel):
     index_years: int = Field(default=3, ge=1, le=5)     # performance chart: start of window = 100
 
 
+class ChatSettings(BaseModel):
+    """Chatbot (dashboard Q&A). Same model family as the AI layer; limits keep the free quota safe."""
+    model: Optional[str] = None                    # None = ai.model
+    max_rounds: int = Field(default=4, ge=1, le=8)            # tool-calling rounds per question
+    history_turns: int = Field(default=4, ge=0, le=10)        # earlier Q&A pairs sent for follow-ups
+    max_question_chars: int = Field(default=600, ge=50, le=4000)
+    max_per_minute: int = Field(default=6, ge=1, le=60)       # per chat session
+    max_per_session: int = Field(default=40, ge=1, le=500)
+    news_days: int = Field(default=30, ge=1, le=90)
+    search_results: int = Field(default=5, ge=1, le=10)       # filing passages returned per search
+
+
 class Settings(BaseModel):
     project: Project
     focal_company: str
@@ -207,6 +223,7 @@ class Settings(BaseModel):
     method: MethodSettings = MethodSettings()
     scenarios: list[HistoricalScenario] = []
     stocks: StockSettings = StockSettings()
+    chat: ChatSettings = ChatSettings()
 
     @model_validator(mode="after")
     def check_references(self):

@@ -118,6 +118,7 @@ VIEWS: dict[str, str] = {
     "news": """
         SELECT f.news_id, COALESCE(c.ticker, 'INDUSTRY') AS ticker, COALESCE(bi.short_name(c.name), 'Airline industry') AS company,
                f.scope, d.full_date AS published, f.title, f.domain, f.url, f.tier, f.topic, f.usable,
+               COALESCE(f.provider, 'gdelt') AS provider, f.summary,
                CASE f.tier WHEN 1 THEN 'Major outlet' WHEN 2 THEN 'Trade press' ELSE 'Other source' END AS tier_label
         FROM gold.fact_news f
         LEFT JOIN gold.dim_company c USING (company_key)
@@ -224,6 +225,12 @@ VIEWS: dict[str, str] = {
                CASE a.severity WHEN 'HIGH' THEN '#9E2A2B' WHEN 'MODERATE' THEN '#8A6200' ELSE '#5F6670' END AS badge_bg
         FROM gold.attention a""",
 
+    # Chatbot text search: passages of each company's latest 10-K / 10-Q (not used by Power BI)
+    "filing_text": """
+        SELECT c.ticker, bi.short_name(c.name) AS company, p.form, p.period_end, p.filed, p.section, p.seq,
+               p.text, p.url, p.tsv
+        FROM gold.fact_filing_passage p JOIN gold.dim_company c USING (company_key)""",
+
     # Header: "Data as of ..."
     # latest observation per market series + when the pipeline last loaded data (the header's "Updated" date)
     "freshness": """
@@ -283,7 +290,23 @@ def create_views(eng: Engine) -> tuple[list[str], dict[str, str]]:
             created.append(name)
         except Exception as e:                       # e.g. ai.brief not created yet on a fresh database
             skipped[name] = str(e).splitlines()[0][:120]
+    grant_chat_reader(eng)
     return created, skipped
+
+
+CHAT_ROLE = "chat_reader"     # created once by sql/chat_reader_role.sql (least privilege for the chatbot)
+
+
+def grant_chat_reader(eng: Engine) -> bool:
+    """The bi schema is dropped and rebuilt every day, which removes its grants. Re-grant the
+    chatbot's role READ access to the bi views only (nothing in silver / gold / ai). No role = no-op."""
+    with eng.begin() as con:
+        if not con.execute(text("SELECT 1 FROM pg_roles WHERE rolname = :r"), {"r": CHAT_ROLE}).first():
+            return False
+        con.execute(text(f"GRANT USAGE ON SCHEMA bi TO {CHAT_ROLE}"))
+        con.execute(text(f"GRANT SELECT ON ALL TABLES IN SCHEMA bi TO {CHAT_ROLE}"))
+        con.execute(text(f"GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA bi TO {CHAT_ROLE}"))   # bi.fmt() etc. inside the views
+    return True
 
 
 def main() -> None:

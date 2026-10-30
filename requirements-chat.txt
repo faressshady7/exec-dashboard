@@ -1,0 +1,3 @@
+# Only for the chat page (not needed by the daily pipeline)
+-r requirements.txt
+streamlit>=1.40

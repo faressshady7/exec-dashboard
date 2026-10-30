@@ -16,6 +16,8 @@ Facts
   fact_news        grain: one news article about one company (or the industry)
   fact_stock       grain: one company x one trading day (closing price, volume)
   fact_shares      grain: one company x one cover-page date (shares outstanding)
+  fact_filing_passage grain: one passage of one section of a company's latest 10-K / 10-Q
+                   (full-text indexed, for the chatbot's search)
 
 Gold is rebuilt from silver in one transaction (small tables, < 1 minute), so it always
 matches silver exactly and a failed build leaves the old gold untouched.
@@ -42,6 +44,7 @@ GRAIN = {
     "fact_news": "one kept article x company (or INDUSTRY), with source tier",
     "fact_stock": "one company x trading day (close, volume)",
     "fact_shares": "one company x cover-page date (shares outstanding)",
+    "fact_filing_passage": "one passage of one section of a latest 10-K / 10-Q",
 }
 
 DDL = """
@@ -128,6 +131,23 @@ CREATE TABLE IF NOT EXISTS gold.fact_news (
 ALTER TABLE gold.fact_news ADD COLUMN IF NOT EXISTS tier SMALLINT;
 ALTER TABLE gold.fact_news ADD COLUMN IF NOT EXISTS topic TEXT;
 ALTER TABLE gold.fact_news ADD COLUMN IF NOT EXISTS usable BOOLEAN;
+ALTER TABLE gold.fact_news ADD COLUMN IF NOT EXISTS provider TEXT;
+ALTER TABLE gold.fact_news ADD COLUMN IF NOT EXISTS summary TEXT;
+
+CREATE TABLE IF NOT EXISTS gold.fact_filing_passage (
+    passage_id   BIGSERIAL PRIMARY KEY,
+    company_key  SMALLINT NOT NULL REFERENCES gold.dim_company,
+    accn         TEXT NOT NULL,
+    form         TEXT NOT NULL,
+    period_end   DATE,
+    filed        DATE,
+    section      TEXT NOT NULL,
+    seq          INTEGER NOT NULL,
+    text         TEXT NOT NULL,
+    url          TEXT,
+    tsv          tsvector GENERATED ALWAYS AS (to_tsvector('english', text)) STORED   -- full-text search
+);
+CREATE INDEX IF NOT EXISTS fact_filing_passage_tsv ON gold.fact_filing_passage USING gin (tsv);
 
 CREATE TABLE IF NOT EXISTS gold.fact_stock (
     company_key  SMALLINT NOT NULL REFERENCES gold.dim_company,
@@ -231,11 +251,12 @@ FACT_SQL = {
         FROM silver.filing f JOIN gold.dim_company c ON c.ticker = f.ticker
         WHERE f.filing_date BETWEEN :start AND :end""",
     "fact_news": """
-        INSERT INTO gold.fact_news (company_key, date_key, url, title, domain, seen_at, scope, tier, topic, usable)
+        INSERT INTO gold.fact_news (company_key, date_key, url, title, domain, seen_at, scope, tier, topic, usable,
+                                    provider, summary)
         SELECT c.company_key, to_char((n.seen_at AT TIME ZONE 'UTC')::date, 'YYYYMMDD')::int,
                n.url, n.title, n.domain, n.seen_at,
                CASE WHEN n.company_key = 'INDUSTRY' THEN 'industry' ELSE 'company' END AS scope,
-               n.tier, COALESCE(n.topic, 'other'), COALESCE(n.usable, FALSE)
+               n.tier, COALESCE(n.topic, 'other'), COALESCE(n.usable, FALSE), n.provider, n.summary
         FROM silver.news_article n
         LEFT JOIN gold.dim_company c ON c.ticker = n.company_key
         WHERE n.seen_at IS NOT NULL AND (n.seen_at AT TIME ZONE 'UTC')::date BETWEEN :start AND :end
@@ -246,6 +267,10 @@ FACT_SQL = {
         SELECT c.company_key, to_char(p.trade_date, 'YYYYMMDD')::int, p.close, p.volume
         FROM silver.stock_price p JOIN gold.dim_company c ON c.ticker = p.ticker
         WHERE p.trade_date BETWEEN :start AND :end""",
+    "fact_filing_passage": """
+        INSERT INTO gold.fact_filing_passage (company_key, accn, form, period_end, filed, section, seq, text, url)
+        SELECT c.company_key, p.accn, p.form, p.period_end, p.filed, p.section, p.seq, p.text, p.url
+        FROM silver.filing_passage p JOIN gold.dim_company c ON c.ticker = p.ticker""",
     "fact_shares": """
         INSERT INTO gold.fact_shares
         SELECT c.company_key, to_char(x.as_of, 'YYYYMMDD')::int, x.shares, x.filed
@@ -279,7 +304,7 @@ def build(s: Settings, eng: Engine, today: date | None = None) -> dict[str, int]
     dates = date_rows(start, end)
     with eng.begin() as con:
         con.execute(text("TRUNCATE gold.fact_financials, gold.fact_market, gold.fact_filing, gold.fact_news, "
-                         "gold.fact_stock, gold.fact_shares, "
+                         "gold.fact_stock, gold.fact_shares, gold.fact_filing_passage, "
                          "gold.dim_company, gold.dim_variable, gold.dim_date RESTART IDENTITY"))
         con.execute(text("INSERT INTO gold.dim_company VALUES (:company_key, :ticker, :cik, :name, :industry, :role, :sort_order)"),
                     company_rows(s))

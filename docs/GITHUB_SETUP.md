@@ -33,6 +33,7 @@ On github.com -> your repo -> **Settings** -> **Secrets and variables** -> **Act
 |---|---|
 | `DATABASE_URL` | everything after `DATABASE_URL=` in your `.env` |
 | `GEMINI_API_KEY` | your new Gemini key |
+| `FINNHUB_API_KEY` | your Finnhub key (news summaries; skipped if missing) |
 
 ## 3. Test it once by hand
 Repo -> **Actions** tab -> **daily-pipeline** -> **Run workflow**. Wait ~5 minutes.

@@ -14,7 +14,7 @@ DB = os.environ.get("TEST_DATABASE_URL")
 def test_every_view_is_defined():
     assert {"kpi_latest", "kpi_trend", "market_today", "market_history", "whatif", "scenarios",
             "robustness", "assumptions", "news", "ai_brief", "freshness", "companies",
-            "stock_history", "valuation", "attention", "ai_recommendations"} == set(VIEWS)
+            "stock_history", "valuation", "attention", "ai_recommendations", "filing_text"} == set(VIEWS)
 
 
 @pytest.mark.skipif(not DB, reason="set TEST_DATABASE_URL to run database tests")

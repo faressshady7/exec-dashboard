@@ -204,3 +204,46 @@ def test_prices_error_is_failed_and_masked(settings, tmp_path):
     denied = all_routes(settings, financialmodelingprep=FakeResponse(401))
     results, _ = run(settings, fast_fetcher(FakeSession(denied)), tmp_path, today=TODAY, price_key="SECRET123", force=True)
     assert all("SECRET123" not in r.detail and "SECRET123" not in r.url for r in results)
+
+
+# --------------------------------------------------------------------------- Finnhub news + SEC documents
+def finnhub(n=2):
+    return json.dumps([{"datetime": 1792900000 + i, "headline": f"United story {i}", "source": "CNBC",
+                        "url": f"https://x/{i}", "summary": "A long enough summary about United Airlines and fuel."}
+                       for i in range(n)]).encode()
+
+
+def test_finnhub_saved_with_key_masked_and_skipped_without_key(settings, tmp_path):
+    routes = all_routes(settings, **{"finnhub.io": FakeResponse(200, finnhub())})
+    results, _ = run(settings, fast_fetcher(FakeSession(routes)), tmp_path, today=TODAY, news_key="FHSECRET99")
+    fh = [r for r in results if r.source == "news_finnhub"]
+    assert len(fh) == 3 and all(r.status == "OK" for r in fh) and fh[0].detail.startswith("2 articles")
+    assert "FHSECRET99" not in (tmp_path / "_manifest.jsonl").read_text()
+    assert all("FHSECRET99" not in r.url for r in fh)
+    results, _ = run(settings, fast_fetcher(FakeSession(routes)), tmp_path / "b", today=TODAY)
+    assert not any(r.source == "news_finnhub" for r in results)
+
+
+def test_finnhub_error_object_fails_and_is_masked(settings, tmp_path):
+    routes = all_routes(settings, **{"finnhub.io": FakeResponse(200, b'{"error": "Invalid API key FHSECRET99"}')})
+    results, _ = run(settings, fast_fetcher(FakeSession(routes)), tmp_path, today=TODAY, news_key="FHSECRET99")
+    fh = [r for r in results if r.source == "news_finnhub"]
+    assert all(r.status == "FAILED" and "FHSECRET99" not in r.detail for r in fh)
+
+
+def test_latest_10k_and_10q_documents_downloaded_once(settings, tmp_path):
+    from dashboard.bronze import latest_text_filings
+    sub = json.dumps({"filings": {"recent": {
+        "form": ["8-K", "10-Q", "10-Q", "10-K"], "filingDate": ["2026-10-21", "2026-10-20", "2026-07-17", "2026-02-20"],
+        "reportDate": ["", "2026-09-30", "2026-06-30", "2025-12-31"], "accessionNumber": ["a-1", "a-2", "a-3", "a-4"],
+        "primaryDocument": ["e.htm", "q3.htm", "q2.htm", "k.htm"]}}}).encode()
+    assert [(x["form"], x["accn"]) for x in latest_text_filings(sub)] == [("10-Q", "a-2"), ("10-K", "a-4")]
+    session = FakeSession(all_routes(settings, submissions=FakeResponse(200, sub),
+                                     **{"Archives/edgar": FakeResponse(200, b"<html><p>Item 1A. Risk Factors</p></html>")}))
+    results, _ = run(settings, fast_fetcher(session), tmp_path, today=TODAY)
+    docs = [r for r in results if r.source == "sec_document"]
+    assert len(docs) == 6 and all(r.status == "OK" for r in docs)          # 3 companies x (10-K + 10-Q)
+    n = sum("Archives/edgar" in u for u, _ in session.calls)
+    results, _ = run(settings, fast_fetcher(session), tmp_path, today=TODAY, force=True)
+    assert sum("Archives/edgar" in u for u, _ in session.calls) == n         # a filing never changes: not fetched again
+    assert all(r.status == "SKIPPED" for r in results if r.source == "sec_document")

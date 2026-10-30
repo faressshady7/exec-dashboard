@@ -14,7 +14,7 @@ result in a database that the Power BI dashboard reads.
 
 ```mermaid
 flowchart LR
-    A[Free sources<br>SEC · FRED · FMP · GDELT] --> B[1 Bronze<br>raw downloads]
+    A[Free sources<br>SEC · FRED · FMP · GDELT · Finnhub] --> B[1 Bronze<br>raw downloads]
     B --> C[2 Silver<br>cleaned tables]
     C --> D[3 Gold<br>star schema]
     D --> E[4 Compute<br>KPIs · sensitivities · what-if]
@@ -22,6 +22,8 @@ flowchart LR
     E --> G[bi views]
     F --> G
     G --> H[Power BI dashboard<br>5 pages, AI text On/Off]
+    G --> I[Chatbot<br>Ask about this page<br>read-only tools, numbers checked]
+    H -. button .-> I
 ```
 
 Runs automatically every day on GitHub Actions (06:17 Cairo, backup run 08:47), which also keeps the free database awake.
@@ -32,10 +34,12 @@ Runs automatically every day on GitHub Actions (06:17 Cairo, backup run 08:47), 
 |---|---|
 | `config/settings.yaml` | **The only place companies, peers, risk variables and thresholds are named** (company-agnostic). |
 | `src/dashboard/` | The pipeline code, one file per step (table below). |
-| `tests/` | Automatic tests (104). They never touch the real database. |
+| `tests/` | Automatic tests (182). They never touch the real database. |
 | `docs/METHOD_NOTES.md` | Every method decision, with the sentence to use in the thesis and its sources. |
 | `docs/GITHUB_SETUP.md` | How the daily GitHub run and its secrets are set up. |
-| `scripts/` | Windows double-click launchers: run everything, the news audit, save API keys. |
+| `docs/CHATBOT.md` | The chatbot: how it answers, security, setup, the Power BI button. |
+| `sql/chat_reader_role.sql` | One-time Supabase script: the chatbot's read-only database account. |
+| `scripts/` | Windows double-click launchers: run everything, the chat page, the news audit, save API keys. |
 | `.github/workflows/daily.yml` | The daily automatic run. |
 | `.env` (laptop only, never uploaded) | Passwords and API keys. |
 | `data/`, `logs/` (laptop only) | Raw downloads and the output of the last local run. |
@@ -51,16 +55,17 @@ Runs automatically every day on GitHub Actions (06:17 Cairo, backup run 08:47), 
 | 4 Compute | `compute.py`, `valuation.py`, `robustness.py`, `attention.py` | gold | KPIs, peer gaps (latest quarter all airlines reported), sensitivities, what-if, past-episode replays, valuation, rule-based alerts, and **the 'why'** (`gold.driver`): each KPI's change vs a year earlier split exactly into its parts (e.g. margin −1.1 pp = fuel −7.4 pp + other costs +6.3 pp) |
 | 5 AI | `insights.py`, `ai.py` | computed results + tested headlines only | `ai.*`: headline, page-1 story (steps that link to pages), a story per page (back / what / why / news / what to do / next), chart titles and captions, options to consider |
 | Views | `bi.py` | gold + compute + ai | `bi.*`: ready-made views that Power BI reads |
+| Chatbot | `chat.py`, `chat_app.py` | a question + the `bi` views, 10-K/10-Q text, news | an answer with sources, every number checked; logged in `ai.chat` |
 | Helpers | `db.py`, `tags.py`, `news_audit.py`, `setkey.py` | | database connection, find a company's SEC tags, news-filter audit, save a key |
 
 ## The database (Supabase, hosted PostgreSQL)
 
 | Schema | Holds |
 |---|---|
-| `silver` | Cleaned source data: `sec_fact`, `fred_observation`, `stock_price`, `share_count`, `news_article`, `filing`, plus the audit tables `drop_summary`, `missing_quarter`, `load_log`. |
-| `gold` | Star schema. Dimensions: `dim_company`, `dim_date`, `dim_variable`. Facts: `fact_financials` (company × metric × quarter), `fact_market` (variable × day), `fact_stock`, `fact_shares`, `fact_filing`, `fact_news`; plus the computed tables. |
-| `ai` | Every AI brief and every attempt, with the prompt version, the check result and the model used. |
-| `bi` | The views Power BI reads (`ai_brief` also carries the page stories `p1..p5_*` and steps `ch1..4_*`): `companies`, `kpi_latest`, `kpi_trend`, `market_today`, `market_history`, `whatif`, `scenarios`, `robustness`, `stock_history`, `valuation`, `attention`, `news`, `ai_brief`, `ai_recommendations`, `freshness`. |
+| `silver` | Cleaned source data: `sec_fact`, `fred_observation`, `stock_price`, `share_count`, `news_article` (GDELT + Finnhub with summaries), `filing`, `filing_passage` (10-K/10-Q text), plus the audit tables `drop_summary`, `missing_quarter`, `load_log`. |
+| `gold` | Star schema. Dimensions: `dim_company`, `dim_date`, `dim_variable`. Facts: `fact_financials` (company × metric × quarter), `fact_market` (variable × day), `fact_stock`, `fact_shares`, `fact_filing`, `fact_news`, `fact_filing_passage` (full-text indexed); plus the computed tables. |
+| `ai` | Every AI brief and every attempt, with the prompt version, the check result and the model used; `ai.chat`: every chatbot question and answer. |
+| `bi` | The views Power BI reads (`ai_brief` also carries the page stories `p1..p5_*` and steps `ch1..4_*`): `companies`, `kpi_latest`, `kpi_trend`, `market_today`, `market_history`, `whatif`, `scenarios`, `robustness`, `stock_history`, `valuation`, `attention`, `news`, `ai_brief`, `ai_recommendations`, `freshness`, and `filing_text` (10-K/10-Q passages for the chatbot's search). |
 
 ## The AI layer in short
 

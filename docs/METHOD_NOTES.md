@@ -167,6 +167,56 @@ possible, report results separately for professionals.
 > "Share prices are daily closes from Financial Modeling Prep; valuation multiples use standard
 > trailing-four-quarter definitions and are left blank where not meaningful (losses, negative equity)."
 
+## 10. Chatbot: questions about the dashboard page (30 Oct 2026)
+Requested by Dr. Minar (Oct 2026): an AI chat, not rule-based, for asking about the dashboard.
+Full design and setup: `docs/CHATBOT.md`. Code: `src/dashboard/chat.py`, page `chat_app.py`.
+- **Why a chatbot:** analytical chatbots let people query data in natural language (Setlur & Tory, 2022);
+  LLMs handle free-form and badly worded questions that rule-based interfaces could not (Maddigan &
+  Susnjak, 2023); existing chatbot interfaces rarely support follow-up questions (Kavaz et al., 2023), so
+  the last 4 exchanges are sent with each question. LLM assistants are being added to dashboards
+  (Dhanoa et al., 2026); reviews name hallucination as the open problem (Martins et al., 2025).
+- **Retrieval, not memory:** the model answers from what fixed tools return (retrieval-augmented
+  generation reduces invented facts in conversation: Shuster et al., 2021; Fan et al., 2024), choosing
+  the tools itself (tool use: Schick et al., 2023). Tools read only the `bi` views, the latest 10-K/10-Q
+  text (full-text search, PostgreSQL) and filtered news (GDELT + Finnhub summaries).
+- **Number rule:** every figure must be a computed fact or appear word for word in an official text the
+  tools returned (10-K/10-Q passage, checked AI brief); numbers from news are not accepted. One rewrite,
+  then the data itself is shown (Huang et al., 2025).
+- **General knowledge:** allowed only on topic, labelled "not from your data", with no numbers;
+  signalling that an answer is less certain reduces over-reliance (Kim et al., 2024, N = 404).
+- **Security:** no LLM-written SQL and a least-privilege database role, because LLM-generated SQL is open
+  to prompt-to-SQL injection (Pedro et al., 2025); news and filing text are treated as untrusted
+  (indirect prompt injection: Greshake et al., 2023); input and output rails refuse requests for
+  secrets, SQL or the instructions and keep the chat on topic (Rebedea et al., 2023). Rate limit and
+  optional password protect the free AI quota (operational choice, no source needed).
+- **Evaluation:** every question is logged in `ai.chat` (outcome, number check, rewrite, tools, time).
+  Report: share answered from data / general / refused, numeric error rate before and after the check,
+  and participant ratings in a short chat task after the main AI On/Off study (questions differ
+  between participants, so the chat is not part of the controlled comparison).
+> "The chatbot retrieves data through fixed, read-only tools rather than generating SQL, as
+> LLM-generated queries are vulnerable to prompt-to-SQL injection (Pedro et al., 2025); retrieved news
+> is treated as untrusted to resist indirect prompt injection (Greshake et al., 2023); answers not
+> grounded in the data are explicitly labelled, which reduces over-reliance (Kim et al., 2024)."
+- **Limitations:** word-based (not meaning-based) search of the latest 10-K/10-Q only; the number check
+  proves a figure exists, not that the sentence is right (wording flags + manual sample cover that).
+
+### 10b. News source 2: Finnhub (30 Oct 2026)
+GDELT gives the widest coverage but headlines only; Finnhub (free key) adds a short summary per
+article (tested 30 Oct 2026: 32 UAL articles in 7 days, all with a summary; 22 Yahoo, 6 Benzinga,
+2 CNBC; 15 of 32 about United). Alpha Vantage was tested first: its news feed is premium-only.
+Same filter as GDELT; an article counts as relevant if the company is named in the headline **or**
+its summary; empty or boilerplate summaries are stored as empty. Rating news by the outlet that
+published it is supported by the high agreement between expert domain-quality ratings (Lin et al., 2023).
+
+### 10c. Method sources for earlier decisions (added 30 Oct 2026)
+- Bronze/silver/gold: the idea of keeping raw data and refining it in quality-improving steps is the
+  lakehouse principle (Armbrust et al., 2021); the names come from industry documentation (context).
+- Drop rule: documenting how data was cleaned and what was removed (Gebru et al., 2021).
+- "Unusual" = 2 standard deviations: outlier detection in time series (Blazquez-Garcia et al., 2021;
+  check it covers SD thresholds before citing); tested at 1.5 / 2 / 2.5 in the robustness table.
+- Robustness re-tests: sensitivity analysis of model assumptions (Razavi et al., 2021); one setting at
+  a time is the simplest form (limitation).
+
 ---
 
 # Verified references (peer-reviewed, 2021-2026 unless marked)
@@ -202,17 +252,37 @@ Gabbiadini et al. 2026 (JATM 130), Alici 2024 (ANDULI 22(25)), Fasanya et al. 20
 uses the same infectious-disease index), Atems & Yimga 2021 (JATM 97), Cai, Zhang & Zhang 2025
 (Economics of Transportation 41), Song, Su & Qin 2025 and Cai, Fu & Zhang 2025 (Transport Policy).
 
+## Chatbot and method sources (added 30 Oct 2026; checked online, open points marked)
+22. Setlur, V., & Tory, M. (2022). How do you converse with an analytical chatbot? Revisiting Gricean maxims for designing analytical conversational behavior. *Proc. CHI 2022*. doi:10.1145/3491102.3501972
+23. Maddigan, P., & Susnjak, T. (2023). Chat2VIS: Generating data visualizations via natural language using ChatGPT, Codex and GPT-3 large language models. *IEEE Access*, 11, 45181-45193. doi:10.1109/ACCESS.2023.3274199
+24. Kavaz, E., Puig, A., & Rodriguez, I. (2023). Chatbot-based natural language interfaces for data visualisation: A scoping review. *Applied Sciences*, 13(12), 7025. doi:10.3390/app13127025
+25. Dhanoa, V., Molina Leon, G., Hoggan, E., Groller, E., Streit, M., & Elmqvist, N. (2026). Hey Dashboard!: Supporting voice, text, and pointing modalities in dashboard onboarding. *Proc. CHI 2026*. doi:10.1145/3772318.3791766
+26. Martins, M., Jardim, B., de Castro Neto, M., & Barriguinha, A. (2025). Talking to data: A systematic review of the rise of conversational agents for visual analytics. *IEEE Access*, 13, 208902-208931. doi:10.1109/ACCESS.2025.3638950
+27. Shuster, K., Poff, S., Chen, M., Kiela, D., & Weston, J. (2021). Retrieval augmentation reduces hallucination in conversation. *Findings of EMNLP 2021*, 3784-3803. doi:10.18653/v1/2021.findings-emnlp.320
+28. Fan, W., Ding, Y., Ning, L., Wang, S., Li, H., Yin, D., Chua, T.-S., & Li, Q. (2024). A survey on RAG meeting LLMs: Towards retrieval-augmented large language models. *Proc. KDD 2024*, 6491-6501. doi:10.1145/3637528.3671470
+29. Schick, T., et al. (2023). Toolformer: Language models can teach themselves to use tools. *NeurIPS 36*, 68539-68551.
+30. Kim, S. S. Y., Liao, Q. V., Vorvoreanu, M., Ballard, S., & Vaughan, J. W. (2024). "I'm not sure, but...": Examining the impact of large language models' uncertainty expression on user reliance and trust. *Proc. FAccT 2024*. doi:10.1145/3630106.3658941
+31. Rebedea, T., Dinu, R., Sreedhar, M. N., Parisien, C., & Cohen, J. (2023). NeMo Guardrails: A toolkit for controllable and safe LLM applications with programmable rails. *Proc. EMNLP 2023: System Demonstrations*, 431-445. doi:10.18653/v1/2023.emnlp-demo.40
+32. Greshake, K., Abdelnabi, S., Mishra, S., Endres, C., Holz, T., & Fritz, M. (2023). Not what you've signed up for: Compromising real-world LLM-integrated applications with indirect prompt injection. *Proc. AISec '23*, 79-90. (check the author order on the ACM page)
+33. Pedro, R., Coimbra, M. E., Castro, D., Carreira, P., & Santos, N. (2025). Prompt-to-SQL injections in LLM-integrated web applications: Risks and defenses. *Proc. ICSE 2025*.
+34. Lin, H., Lasser, J., Lewandowsky, S., Cole, R., Gully, A., Rand, D. G., & Pennycook, G. (2023). High level of correspondence across different news domain quality rating sets. *PNAS Nexus*, 2(9), pgad286. doi:10.1093/pnasnexus/pgad286
+35. Armbrust, M., Ghodsi, A., Xin, R., & Zaharia, M. (2021). Lakehouse: A new generation of open platforms that unify data warehousing and advanced analytics. *CIDR 2021*.
+36. Gebru, T., Morgenstern, J., Vecchione, B., Wortman Vaughan, J., Wallach, H., Daume III, H., & Crawford, K. (2021). Datasheets for datasets. *Communications of the ACM*, 64(12), 86-92. doi:10.1145/3458723
+37. Blazquez-Garcia, A., Conde, A., Mori, U., & Lozano, J. A. (2021). A review on outlier/anomaly detection in time series data. *ACM Computing Surveys*, 54(3). doi:10.1145/3444690
+38. Razavi, S., Jakeman, A., Saltelli, A., et al. (2021). The future of sensitivity analysis: An essential discipline for systems modeling and policy support. *Environmental Modelling & Software*, 137, 104954. doi:10.1016/j.envsoft.2020.104954
+
 ## Data sources (cite as data, not as evidence - age rule does not apply)
 - Baker, Bloom & Davis (2016), *QJE* 131(4) - economic policy uncertainty and EMV trackers (FRED).
 - Caldara & Iacoviello (2022), *AER* 112(4) - geopolitical risk index (planned).
 - FRED (Federal Reserve Bank of St. Louis); SEC EDGAR XBRL company facts; GDELT DOC 2.0;
-  Financial Modeling Prep (end-of-day share prices).
+  Financial Modeling Prep (end-of-day share prices); Finnhub company news (article summaries).
 
 ## Classics (theory and definitions only - confirm with Dr. Minar)
 Simon (1947, 1960); Sweller (1988); Shneiderman (1996); Tufte (2001); Eppler & Mengis (2004);
 Tetlock (2007); Kahneman & Klein (2009); Segel & Heer (2010).
 
 ## Industry context (not peer-reviewed; label as context)
+Databricks/Microsoft documentation: the bronze/silver/gold (medallion) names.
 Oracle (2023) decision-making survey; McKinsey (2019) decision making in the age of urgency; Gartner (2024/2025).
 
 ## Still to verify / not used

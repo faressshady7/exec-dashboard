@@ -375,3 +375,73 @@ def test_drop_checker_stops_run_if_covered_drop_leaves_a_gap():
 def test_drop_checker_passes_when_quarter_is_covered():
     kept, rej, _ = _audit(CASHFLOW_YTD, {"operating_cash_flow": CF})
     assert not rej["needed"].any()
+
+
+# --------------------------------------------------------------------------- Finnhub news + filing text
+def test_finnhub_news_maps_outlet_and_drops_boilerplate_summaries():
+    import json as _json
+    from dashboard.silver import classify_news, parse_finnhub_news
+    s = load_settings()
+    raw = _json.dumps([
+        {"datetime": 1793000000, "headline": "Is It Too Early To Buy United Airlines Stock?", "source": "Yahoo",
+         "url": "https://finnhub.io/api/news?id=1", "summary": "For questions about this article or underlying research, email help@trefis.com."},
+        {"datetime": 1793000500, "headline": "SpaceX's Starlink Gives Airlines a Big Edge", "source": "Yahoo",
+         "url": "https://finnhub.io/api/news?id=2",
+         "summary": "Citi analyst John Godyn pointed out that United Airlines is rolling the satellite internet service out at scale."},
+        {"datetime": 1793001000, "headline": "FedEx Q3 Earnings Top Estimates", "source": "Benzinga",
+         "url": "https://finnhub.io/api/news?id=3", "summary": "FedEx beat estimates on higher package yields and volume growth."},
+        {"datetime": 1793001500, "headline": "", "source": "CNBC", "url": "https://x"}]).encode()
+    df = parse_finnhub_news(raw, "UAL", s.news)
+    assert len(df) == 3 and set(df["provider"]) == {"finnhub"}
+    assert pd.isna(df["summary"].iloc[0])                                   # boilerplate -> empty
+    assert list(df["domain"]) == ["finance.yahoo.com", "finance.yahoo.com", "benzinga.com"]
+    tagged = classify_news(df, s).set_index("url")
+    assert tagged.loc["https://finnhub.io/api/news?id=1", "relevant"]       # name in the headline
+    assert tagged.loc["https://finnhub.io/api/news?id=2", "relevant"]       # name only in the summary
+    assert not tagged.loc["https://finnhub.io/api/news?id=3", "relevant"]   # FedEx story: not about United
+    assert tagged.loc["https://finnhub.io/api/news?id=2", "tier"] == 2      # Yahoo Finance = tier 2 in settings
+
+
+TEN_K = b"""<html><head><title>10-K</title></head><body>
+<div style="display:none"><ix:header><ix:hidden>dei:EntityRegistrantName United</ix:hidden></ix:header></div>
+<p>TABLE OF CONTENTS</p><table><tr><td>Item 1A. Risk Factors</td><td>12</td></tr>
+<tr><td>Item 7. Management's Discussion and Analysis</td><td>40</td></tr>
+<tr><td>Item 7A. Quantitative and Qualitative Disclosures About Market Risk</td><td>60</td></tr></table>
+<p>Item 1. Business</p><p>We fly planes.</p>
+<p>Item 1A. Risk Factors</p>
+<p>The airline industry is highly competitive and fuel prices are volatile. """ + b"Fuel risk sentence. " * 60 + b"""</p>
+<p>Our pilots are represented by unions and a strike could disrupt operations. """ + b"Labour sentence. " * 60 + b"""</p>
+<p>Item 1B. Unresolved Staff Comments</p><p>None.</p>
+<p>Item 7. Management&#8217;s Discussion and Analysis of Financial Condition</p>
+<p>Revenue grew because demand stayed strong. """ + b"MD&amp;A sentence. " * 80 + b"""</p>
+<p>Item 7A. Quantitative and Qualitative Disclosures About Market Risk</p>
+<p>A one-dollar change in the price per gallon would change annual fuel expense by about $4.6 billion. """ + b"Risk sentence. " * 40 + b"""</p>
+<p>Item 8. Financial Statements</p><p>Numbers.</p></body></html>"""
+
+
+def test_filing_text_sections_skip_the_contents_and_hidden_xbrl():
+    from dashboard.silver import filing_passages, find_sections, html_to_text, passages
+    txt = html_to_text(TEN_K)
+    assert "EntityRegistrantName" not in txt                                 # hidden inline-XBRL header skipped
+    sec = find_sections(txt, "10-K")
+    assert set(sec) == {"Risk factors", "Management's discussion (MD&A)", "Market risk"}
+    assert "pilots are represented" in sec["Risk factors"] and "Unresolved" not in sec["Risk factors"]
+    assert "Management’s" in sec["Management's discussion (MD&A)"]      # curly apostrophe still matched
+    assert "$4.6 billion" in sec["Market risk"] and "Financial Statements" not in sec["Market risk"]
+    assert all(v.startswith("Item") and "We fly planes" not in v for v in sec.values())   # never the contents page
+    ps = passages(sec["Risk factors"])
+    assert len(ps) >= 2 and all(len(p) <= 1600 for p in ps)
+    df = filing_passages(TEN_K, {"form": "10-K", "accn": "0001-26-1", "filed": "2026-02-20", "period": "2025-12-31"},
+                         "UAL", "https://sec.gov/x")
+    assert set(df["section"]) == set(sec) and df.groupby("section")["seq"].min().eq(1).all()
+
+
+def test_ten_q_sections_use_the_quarterly_item_numbers():
+    from dashboard.silver import find_sections
+    txt = ("Item 2. Management's Discussion and Analysis\n" + "Quarter went well. " * 30 +
+           "\nItem 3. Quantitative and Qualitative Disclosures About Market Risk\n" + "Fuel is not hedged. " * 30 +
+           "\nItem 4. Controls and Procedures\nFine.\nPART II\nItem 1A. Risk Factors\n" + "No material changes. " * 20 +
+           "\nItem 2. Unregistered Sales of Equity Securities\nNone.")
+    sec = find_sections(txt, "10-Q")
+    assert "Fuel is not hedged" in sec["Market risk"] and "Controls" not in sec["Market risk"]
+    assert "Unregistered" not in sec["Risk factors"]
