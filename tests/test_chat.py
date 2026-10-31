@@ -471,3 +471,9 @@ def test_timeout_counts_as_busy():
     g.models, g.timings, g.cooldown, g.skip_until = ["main", "backup"], [], 300, {}
     g.client = type("C", (), {"models": FakeModels()})()
     assert g._generate([], None) == "ok" and "main" in g.skip_until
+
+
+def test_db_password_swap_keeps_server_and_encodes():
+    from dashboard.setdbpw import with_password
+    u = with_password("postgresql://postgres.ref:OLD@aws-0-eu-west-1.pooler.supabase.com:5432/postgres", "n@w:p/w%")
+    assert u == "postgresql://postgres.ref:n%40w%3Ap%2Fw%25@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
