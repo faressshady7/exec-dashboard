@@ -59,13 +59,13 @@ gate()
 
 # ---------------------------------------------------------------- backend (once per server)
 @st.cache_resource
-def backend():
+def backend(code_version: str):            # a new version string reloads the chat code without a restart
     eng = chat_engine()
     return eng, Tools(s, eng), GeminiChat(s)
 
 
 try:
-    eng, tools, model = backend()
+    eng, tools, model = backend("2026-10-31")
 except SystemExit as e:                                 # missing key / wrong account: say what to fix
     st.error(f"Chat is not set up yet: {e}")
     st.stop()
