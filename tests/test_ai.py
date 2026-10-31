@@ -508,3 +508,11 @@ def test_why_quarter_names_the_quarter_of_the_calculated_why():
                 significance=0.8, impact=0.9)
     assert _why_quarter([w], "Operating margin fell 1.1 pp as fuel took 7.4 pp.") == "Q3 2026 vs Q3 2025"
     assert _why_quarter([], "anything") == ""
+
+
+def test_rank_n_of_m_says_what_the_rank_means():
+    from dashboard.ai import RANK_N_OF_M, _rank_words
+    f = lambda s: RANK_N_OF_M.sub(_rank_words, s)
+    assert f("Free Cash Flow Ranks 3 of 3 with -$351M") == "Free Cash Flow Ranks worst of 3 with -$351M"
+    assert f("ranking 1 out of 3") == "ranking best of 3"
+    assert f("rank 2/3") == "rank 2 of 3 (1 = best)"

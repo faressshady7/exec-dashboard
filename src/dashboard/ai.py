@@ -625,6 +625,19 @@ DOWN_MINUS = re.compile(r"\b((?:fell|dropped|declined|decreased|took|cuts?|cutti
 QUOTED_NUM = re.compile(r"[\"\u201c\u201d']([-\u2212+]?\$?\d[\d.,]*\s?(?:%|pp|bp|[MBK]\b|/gal)?)[\"\u201c\u201d']")
 
 
+# 'ranks 3 of 3' does not say whether 3 is good: code writes what the rank means (rank 1 = best)
+RANK_N_OF_M = re.compile(r"\b(rank(?:s|ed|ing)?)\s+#?(\d+)\s*(?:of|out of|/)\s*(\d+)\b", re.IGNORECASE)
+
+
+def _rank_words(m: re.Match) -> str:
+    verb, n, total = m.group(1), int(m.group(2)), int(m.group(3))
+    if n == 1:
+        return f"{verb} best of {total}"
+    if n == total:
+        return f"{verb} worst of {total}"
+    return f"{verb} {n} of {total} (1 = best)"
+
+
 def _unquote(obj):
     """The model sometimes copies display values with their quotes ('cuts it by "-$417M"'): strip them,
     so the text reads normally and the sign/double-negative checks still see the number."""
@@ -639,6 +652,7 @@ def _unquote(obj):
     if not isinstance(obj, str):
         return obj
     obj = QUOTED_NUM.sub(r"\1", obj)
+    obj = RANK_N_OF_M.sub(_rank_words, obj)
     # 'fell -$354M' / 'cuts it by -$417M': the direction word already carries the sign, so drop the minus.
     # Only for DOWN words; 'rose -$354M' stays and is rejected (the direction itself would be wrong).
     return DOWN_MINUS.sub(lambda m: m.group(1) + m.group(2), obj)
