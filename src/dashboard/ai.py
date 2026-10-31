@@ -557,6 +557,13 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
                 r_ok, r_why = False, "too vague: say what to consider and the number that makes it matter"
             if not r_ok:
                 chk = Check(False, chk.numbers_found, [f"resolution: {r_why}"])
+        if chk.passed and draft.complication.strip() and not QUARTER.search(draft.complication):
+            wq = _why_quarter(whys, draft.complication)
+            if wq and wq.split(" vs ")[0] not in draft.headline:     # the why is about another quarter: say which
+                c = draft.complication.strip()
+                c = c if re.match(r"[A-Z]{2,}\b", c) else c[0].lower() + c[1:]
+                draft.complication = f"In {wq}, {c}"
+                draft.brief = " ".join(x.strip() for x in (draft.situation, draft.complication, draft.resolution) if x.strip())
         if chk.passed and not _peer_quarter_ok(draft.headline):
             pq = _peer_quarter(cands)
             if pq:                                   # code adds the quarter rather than failing a good headline
@@ -799,6 +806,16 @@ def _peer_quarter(items: list[Insight]) -> str:
             m = QUARTER.search(c.summary + " " + " ".join(f.label for f in c.facts))
             if m:
                 return m.group(0)
+    return ""
+
+
+def _why_quarter(whys: list[Insight], text_: str) -> str:
+    """'Q3 2026 vs Q3 2025' for the calculated why the sentence is about (the KPI it names, else the first)."""
+    low = (text_ or "").lower()
+    for c in [c for c in whys if _names_metric(c, low)] or whys[:1]:
+        for f in c.facts:
+            if f.id.endswith(".change") and ", " in f.label:
+                return f.label.rsplit(", ", 1)[1]
     return ""
 
 

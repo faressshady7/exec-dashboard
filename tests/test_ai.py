@@ -498,3 +498,13 @@ def test_a_level_keeps_its_minus():
     t = lambda x: _unquote(Chapter(text=x, page=5)).text
     assert t("Free cash flow fell to -$351M in Q2 2026.") == "Free cash flow fell to -$351M in Q2 2026."
     assert t("Free cash flow fell -$815M to -$351M.") == "Free cash flow fell $815M to -$351M."
+
+
+def test_why_quarter_names_the_quarter_of_the_calculated_why():
+    from dashboard.ai import _why_quarter
+    from dashboard.insights import Fact, Insight
+    w = Insight(id="driver:operating_margin_pct", type="driver", title="Why operating margin changed", summary="",
+                facts=[Fact("why.operating_margin_pct.change", "Operating margin change, Q3 2026 vs Q3 2025", -1.1, "pp")],
+                significance=0.8, impact=0.9)
+    assert _why_quarter([w], "Operating margin fell 1.1 pp as fuel took 7.4 pp.") == "Q3 2026 vs Q3 2025"
+    assert _why_quarter([], "anything") == ""
