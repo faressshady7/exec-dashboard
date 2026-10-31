@@ -200,6 +200,7 @@ class StockSettings(BaseModel):
 class ChatSettings(BaseModel):
     """Chatbot (dashboard Q&A). Same model family as the AI layer; limits keep the free quota safe."""
     model: Optional[str] = None                    # None = ai.model
+    thinking_level: Optional[Literal["minimal", "low", "medium", "high"]] = "low"   # less thinking = faster answers
     max_rounds: int = Field(default=4, ge=1, le=8)            # tool-calling rounds per question
     history_turns: int = Field(default=4, ge=0, le=10)        # earlier Q&A pairs sent for follow-ups
     max_question_chars: int = Field(default=600, ge=50, le=4000)

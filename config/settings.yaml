@@ -350,6 +350,7 @@ stocks:
 # Questions with no answer in the data get general knowledge, labelled and without numbers.
 chat:
   model: null                # null = same model as ai.model
+  thinking_level: low        # model 'thinking' per call: minimal | low | medium | high (less = faster)
   max_rounds: 4              # tool-calling rounds per question
   history_turns: 4           # earlier questions sent along, so follow-up questions work
   max_question_chars: 600

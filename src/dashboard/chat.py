@@ -361,6 +361,7 @@ class Tools:
 class ChatModel:
     """The LLM with tool calling. run() returns the final text; `execute(name, args)` runs a tool."""
     name = "base"
+    timings: list                          # one entry per model call ("model 4.2s"), reset per question
 
     def run(self, system: str, history: list[tuple[str, str]], question: str, tools: list[dict],
             execute: Callable[[str, dict], dict], max_rounds: int) -> str:  # pragma: no cover
@@ -379,6 +380,7 @@ class GeminiChat(ChatModel):
         self.types = types
         self.client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=s.ai.request_timeout_s * 1000))
         self.cfg, self.models = s.ai, [m for m in (s.chat.model or s.ai.model, s.ai.fallback_model) if m]
+        self.timings, self.thinking = [], s.chat.thinking_level
         self.name = self.models[0]
 
     def _config(self, system: str, tools: list[dict] | None):
@@ -389,17 +391,21 @@ class GeminiChat(ChatModel):
             kw["tools"] = [t.Tool(function_declarations=[t.FunctionDeclaration(
                 name=x["name"], description=x["description"], parameters_json_schema=x["parameters"]) for x in tools])]
             kw["automatic_function_calling"] = t.AutomaticFunctionCallingConfig(disable=True)
-        if self.cfg.thinking_level:
-            kw["thinking_config"] = t.ThinkingConfig(thinking_level=self.cfg.thinking_level)
+        if self.thinking:
+            kw["thinking_config"] = t.ThinkingConfig(thinking_level=self.thinking)
         return t.GenerateContentConfig(**kw)
 
     def _generate(self, contents, config):
         busy = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out")
         for i, model in enumerate(self.models):
+            t0 = time.time()
             try:
                 self.name = model
-                return self.client.models.generate_content(model=model, contents=contents, config=config)
+                r = self.client.models.generate_content(model=model, contents=contents, config=config)
+                self.timings.append(f"{model} {time.time() - t0:.1f}s")
+                return r
             except Exception as e:
+                self.timings.append(f"{model} FAILED after {time.time() - t0:.1f}s: {str(e)[:60]}")
                 if i + 1 < len(self.models) and any(b.lower() in str(e).lower() for b in busy):
                     continue                                  # main model busy -> backup model
                 raise
@@ -428,7 +434,7 @@ class GeminiChat(ChatModel):
 class MockChat(ChatModel):
     """For tests: `script(question, execute)` plays the model (calls tools, returns text)."""
     def __init__(self, script: Callable[[str, Callable], str]):
-        self.script, self.name, self.calls = script, "mock", 0
+        self.script, self.name, self.calls, self.timings = script, "mock", 0, []
 
     def run(self, system, history, question, tools, execute, max_rounds):
         self.calls += 1
@@ -484,13 +490,17 @@ class _Session:
     """What the tools returned during one question (facts, quotable texts, sources)."""
     def __init__(self, tools: Tools):
         self.tools, self.facts, self.texts, self.sources, self.used = tools, [], [], [], []
+        self.tool_s = 0.0
 
     def execute(self, name: str, args: dict) -> dict:
         self.used.append(name)
+        t0 = time.time()
         try:
             r = self.tools.call(name, args)
         except Exception as e:                       # bad arguments or no data: tell the model, don't crash
             return {"error": str(e)[:200]}
+        finally:
+            self.tool_s += time.time() - t0
         self.facts += r.facts
         self.texts += r.texts
         for src in r.sources:
@@ -538,9 +548,15 @@ def answer(question: str, ticker: str, s: Settings, tools: Tools, model: ChatMod
     ticker = ticker if ticker in tools.tickers else s.focal_company
     company = s.company(ticker).name
 
+    model.timings = []
+    sess = None
+
     def done(res: ChatResult) -> ChatResult:
         res.latency_ms = int((time.time() - t0) * 1000)
         res.model = res.model or model.name
+        if model.timings or sess:                    # where the time went (stored with the chat, for tuning)
+            res.flags.append("timing: " + ", ".join(model.timings) +
+                             (f"; data tools {sess.tool_s:.1f}s" if sess else ""))
         return res
 
     why = input_rail(question, s.chat.max_question_chars)
@@ -658,7 +674,9 @@ def main() -> None:
     r = answer(sys.argv[2], sys.argv[1].upper(), s, Tools(s, eng), GeminiChat(s),
                page=sys.argv[3] if len(sys.argv) > 3 else None)
     log(eng, r, sys.argv[2], sys.argv[1].upper(), None, "cli")
-    print(f"[{r.outcome} · numbers checked: {r.check_passed} · tools: {', '.join(r.tools_used) or '-'}]\n")
+    print(f"[{r.outcome} · numbers checked: {r.check_passed} · rewritten: {r.rewritten} · "
+          f"tools: {', '.join(r.tools_used) or '-'} · {r.latency_ms / 1000:.1f}s]")
+    print("; ".join(f for f in r.flags if f.startswith("timing")) + "\n")
     print(r.answer)
     for src in r.sources:
         print(f"  - {src.get('type')}: {src.get('title')} {src.get('url') or ''}")
