@@ -1,0 +1,2 @@
+# Used by Streamlit Community Cloud for the hosted chat page (it reads the file next to chat_app.py)
+-r ../../requirements-chat.txt

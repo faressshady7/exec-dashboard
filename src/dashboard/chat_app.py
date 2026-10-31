@@ -52,9 +52,13 @@ s = load_settings()
 tickers = [c.ticker for c in s.in_scope]
 
 
-# ---------------------------------------------------------------- password (if CHAT_PASSWORD is set)
+# ---------------------------------------------------------------- password (always when hosted online)
 def gate() -> None:
     pw = os.environ.get("CHAT_PASSWORD", "")
+    local = os.environ.get("CHAT_LOCAL") == "1"   # set by scripts/run_chat.bat (this computer only)
+    if not pw and not local:                    # hosted online: never open without a password
+        st.error("This chat page is online and has no password set. Add CHAT_PASSWORD to the app's secrets.")
+        st.stop()
     if not pw or st.session_state.get("ok"):
         return
     entered = st.text_input("Password", type="password")

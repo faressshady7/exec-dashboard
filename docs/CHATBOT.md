@@ -87,6 +87,30 @@ in an official text the tools returned (a 10-K/10-Q passage, or the already-chec
 3. **Format button → Action → On**, Type **Web URL**, click **fx** → Field value → `Chat Link P1`.
 4. In Power BI Desktop: **Ctrl + click** the button. In reading view: normal click.
 
+## Always on: hosted on Streamlit Community Cloud (free)
+
+The chat page runs online, so nothing has to be started on the laptop. The Power BI button opens
+`https://ual-exec-chat.streamlit.app/?company=UAL&page=N`.
+
+Deploy once (about 5 minutes; done by the account owner, Claude cannot sign in for you):
+1. Open share.streamlit.io and choose **Continue with GitHub**.
+2. **Create app** > deploy from GitHub: repository `faressshady7/exec-dashboard`, branch `main`,
+   main file path `src/dashboard/chat_app.py`, app URL `ual-exec-chat`.
+3. **Advanced settings**: Python 3.12, and paste the secrets (values from your `.env`):
+   ```toml
+   GEMINI_API_KEY = "..."
+   CHAT_DATABASE_URL = "..."      # the read-only chat_reader account, never DATABASE_URL
+   CHAT_PASSWORD = "..."          # required online: the page refuses to open without it
+   ```
+4. **Deploy**. Streamlit installs `src/dashboard/requirements.txt` and starts the page.
+
+Notes
+- Online the page always asks for the password; on this computer (`scripts\run_chat.bat`, `CHAT_LOCAL=1`)
+  it does not.
+- After about 12 hours without visitors the app sleeps; the next visitor wakes it (roughly 30 seconds).
+- New code on `main` is picked up automatically; the page reloads changed chat code by itself.
+- The database account is still read-only and the admin account is refused (see Security).
+
 ## Evaluation data (`ai.chat`)
 
 One row per question: question, answer, outcome (`answered`, `general`, `refused_security`,

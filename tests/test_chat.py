@@ -339,6 +339,19 @@ def test_chat_reader_role_can_only_read_bi_and_add_to_its_log(s):
 
 
 # --------------------------------------------------------------------------- the chat page (Streamlit)
+@pytest.fixture(autouse=True)
+def _local_page(monkeypatch):
+    monkeypatch.setenv("CHAT_LOCAL", "1")        # as scripts/run_chat.bat (this computer only)
+
+
+def test_hosted_page_refuses_to_open_without_a_password(monkeypatch):
+    monkeypatch.delenv("CHAT_LOCAL")
+    monkeypatch.delenv("CHAT_PASSWORD", raising=False)
+    monkeypatch.setattr("dashboard.chat.chat_engine", lambda: (_ for _ in ()).throw(AssertionError("must not connect")))
+    at = _app().run()
+    assert not at.exception and "no password" in at.error[0].value and not at.chat_input
+
+
 def _app():
     st = pytest.importorskip("streamlit.testing.v1")
     return st.AppTest.from_file(str(ROOT / "src" / "dashboard" / "chat_app.py"), default_timeout=30)
