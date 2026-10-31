@@ -93,7 +93,7 @@ def show(q, r) -> None:
     with st.chat_message("user"):
         st.write(q)
     with st.chat_message("assistant"):
-        st.write(r.answer)
+        st.markdown(r.answer.replace("$", "\\$"))     # '$' would start a maths formula in Markdown
         if r.outcome in BADGE:
             st.caption(BADGE[r.outcome])
         if r.sources:

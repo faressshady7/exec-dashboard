@@ -5,6 +5,7 @@ toolbarMode = "viewer"          # hide the developer menu ("Deploy")
 [server]
 headless = true
 port = 8501
+address = "localhost"     # only this computer can open the chat page
 
 [browser]
 gatherUsageStats = false        # no usage data sent to Streamlit

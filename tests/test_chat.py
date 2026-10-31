@@ -410,3 +410,11 @@ def test_setup_creates_the_account_and_can_run_again(tmp_path):
     assert env.read_text() == "DATABASE_URL=x\nCHAT_DATABASE_URL=new\n"
     with admin.begin() as con:
         con.execute(text("DROP SCHEMA bi CASCADE; DROP SCHEMA ai CASCADE; DROP SCHEMA gold CASCADE; DROP OWNED BY chat_reader; DROP ROLE chat_reader"))
+
+
+def test_tool_text_avoids_double_negatives_and_misleading_rank_labels(s):
+    r = FakeTools(s).call("run_what_if", {"company": "UAL", "fuel_change_pct": 10})
+    assert r.data[0]["operating_income_per_quarter_from_fuel"] == "lower by $400M"
+    k = FakeTools(s).call("get_kpis", {"company": "UAL"})
+    assert k.data[0]["versus_other_airlines_average"] == "worse than the other airlines' average"
+    assert "OTHER TWO" not in str(k.data)

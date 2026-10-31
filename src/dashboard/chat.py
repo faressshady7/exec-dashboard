@@ -104,6 +104,15 @@ KPI_CODES = ("revenue", "revenue_yoy_pct", "operating_margin_pct", "net_margin_p
              "fuel_cost_yoy_pct", "interest_coverage_x", "free_cash_flow", "net_debt", "debt_to_assets_pct",
              "liquidity")
 SECTIONS = ("Risk factors", "Management's discussion (MD&A)", "Market risk")
+# the dashboard's pill compares with the AVERAGE of the other airlines, not with each one ("2 of 3" can be above it)
+STATUS = {"BETTER THAN THE OTHER TWO": "better than the other airlines' average",
+          "WORSE THAN THE OTHER TWO": "worse than the other airlines' average",
+          "IN LINE": "in line with the other airlines' average", "NO COMPARISON": "no comparison available"}
+
+
+def _change(v: float) -> str:
+    """-4.17e8 -> 'lower by $417M' (no 'reduce by -$417M' double negatives)."""
+    return "no change" if not v else f"{'lower' if v < 0 else 'higher'} by {fmt(abs(v), 'USD')}"
 
 
 def _num(v) -> Optional[float]:
@@ -203,7 +212,8 @@ class Tools:
                 if v is not None:
                     facts.append(Fact(f"kpi:{t}:{r['kpi']}:{key}", r["label"] + lab, v, r["unit"]))
             data.append({"kpi": r["label"], "quarter": r["quarter_label"], "value": r["value_text"],
-                         "other_airlines_average": r["own_peer_avg_text"], "rank": r["rank_text"], "status": r["status"]})
+                         "other_airlines_average": r["own_peer_avg_text"], "rank": r["rank_text"],
+                         "versus_other_airlines_average": STATUS.get(r["status"], r["status"])})
         return ToolResult(data, facts, sources=[{"type": "Dashboard", "title": f"KPIs, latest quarter ({t})"}])
 
     def t_get_kpi_history(self, company, kpi) -> ToolResult:
@@ -266,8 +276,8 @@ class Tools:
                  Fact("wi:margin_change", "change in operating margin", margin - base_margin, "pp")]
         data = [{"company": t, "base_quarter": str(r["base_quarter"]),
                  "fuel_change": f"{fuel:+.0f}%", "rate_change": f"{rate:+.0f} bp",
-                 "estimated_fuel_effect_per_quarter": fmt(fuel_imp, "USD"),
-                 "estimated_interest_effect_per_quarter": fmt(rate_imp, "USD") if rate_per is not None
+                 "operating_income_per_quarter_from_fuel": _change(fuel_imp),
+                 "pre_tax_income_per_quarter_from_interest": _change(rate_imp) if rate_per is not None
                  else "not modelled (the past link is too weak)",
                  "operating_income_base": fmt(base_op, "USD"), "operating_income_estimated": fmt(op, "USD"),
                  "operating_margin_base": fmt(base_margin, "%"), "operating_margin_estimated": fmt(margin, "%"),
