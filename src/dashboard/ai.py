@@ -33,7 +33,7 @@ from sqlalchemy.engine import Engine
 from dashboard.config import AISettings, PROJECT_ROOT, Settings, load_settings
 from dashboard.insights import Fact, Insight, build_candidates, narrative_facts, news_items, news_line, recency, score
 
-PROMPT_VERSION = "v7"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
+PROMPT_VERSION = "v8"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
                         # v4 (20 Oct 2026): storytelling - brief as Situation/Complication/Resolution, chart captions, start here
                         # v5 (25 Oct 2026): action title + so-what caption per chart, chart-specific evidence,
                         #   every item number-checked on its own (one bad caption no longer discards the rest)
@@ -42,6 +42,8 @@ PROMPT_VERSION = "v7"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026)
                         # v7 (26 Oct 2026): story layer - page-1 chapters, page stories (what / why from the
                         #   calculated drivers / one tested headline by id / what to do / next), brief as
                         #   what happened / why / what to do; 'because' only where the arithmetic backs it
+                        # v8 (31 Oct 2026): quarters named when mixed, ranks say what 1 means, 'partly offset' vs
+                        #   'cancelled out', page 5 may explain the operating margin
 
 SYSTEM = """You are a briefing analyst for airline executives.
 Rules you must follow:
@@ -114,7 +116,7 @@ class Captions(BaseModel):
 
 
 CHARTS = {"jet_fuel": "page 1: jet fuel price over 10 years",
-          "share_price": "page 2: share prices of the three airlines, rebased to 100 three years ago",
+          "share_price": "page 2: share prices of the three airlines, rebased to 100 three years ago (so the title must use the 3-year change, not the 1-year return)",
           "valuation": "page 2: market value, net debt and price/earnings of the three airlines",
           "peer_bars": "page 2: operating margin of the three airlines, same quarter (a fuel-share chart sits next to it)",
           "sensitivity": "page 3: estimated effect on quarterly operating income of +10% jet fuel and +1 point rates",
@@ -184,7 +186,7 @@ PAGE_WHAT = {"page_briefing": ("market_position", "exposure", "peer_gap", "trend
 # which calculated 'why' each page explains
 PAGE_DRIVER = {"page_briefing": ("operating_margin_pct", "operating_income"), "page_peers": ("operating_margin_pct",),
                "page_risks": ("operating_margin_pct", "operating_income"), "page_whatif": ("operating_income",),
-               "page_detail": ("free_cash_flow", "net_debt")}
+               "page_detail": ("operating_margin_pct", "free_cash_flow", "net_debt")}
 # news topics that may sit next to a driver (code decides which headline can go with which number)
 DRIVER_TOPICS = {"fuel": ("fuel",), "other_costs": ("labour", "operations"), "revenue": ("demand", "results"),
                  "special_items": ("results",), "operating_cash_flow": ("results", "demand"),
@@ -385,7 +387,12 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "", news: 
             f"episodes; page 2: the gap vs peers; page 5: how the KPIs moved).\n"
             f"   - why: one sentence from the page's 'why' insights (calculated by code). Say 'mostly because' ONLY when "
             f"that insight's summary says 'mostly because', and name the same driver. If it says 'no single driver' or "
-            f"'cancelled out', say that instead. Never give any other cause.\n"
+            f"'cancelled out', say that instead. Never give any other cause. Keep the direction of the change "
+            f"(rose / fell) and say 'partly offset' unless the parts really cancel to about zero.\n"
+            f"   - Quarters: every number belongs to a quarter. If one sentence or one brief uses numbers from different "
+            f"quarters, name each quarter; never present a later quarter's change under an earlier quarter's heading.\n"
+            f"   - Ranks: rank 1 = best. Say what the rank means ('the highest of the three', 'the best of three'), "
+            f"never only 'ranks third'.\n"
             f"   - news_id: the id of ONE headline below whose topic is allowed for this page, or empty. Do not write the "
             f"headline yourself; it is shown as written, with its source and date.\n"
             f"   - todo and next_page: leave empty (written by code).\n\n"
@@ -550,6 +557,13 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
                 r_ok, r_why = False, "too vague: say what to consider and the number that makes it matter"
             if not r_ok:
                 chk = Check(False, chk.numbers_found, [f"resolution: {r_why}"])
+        if chk.passed and draft.complication.strip() and not QUARTER.search(draft.complication):
+            wq = _why_quarter(whys, draft.complication)
+            if wq and wq.split(" vs ")[0] not in draft.headline:     # the why is about another quarter: say which
+                c = draft.complication.strip()
+                c = c if re.match(r"[A-Z]{2,}\b", c) else c[0].lower() + c[1:]
+                draft.complication = f"In {wq}, {c}"
+                draft.brief = " ".join(x.strip() for x in (draft.situation, draft.complication, draft.resolution) if x.strip())
         if chk.passed and not _peer_quarter_ok(draft.headline):
             pq = _peer_quarter(cands)
             if pq:                                   # code adds the quarter rather than failing a good headline
@@ -611,6 +625,19 @@ DOWN_MINUS = re.compile(r"\b((?:fell|dropped|declined|decreased|took|cuts?|cutti
 QUOTED_NUM = re.compile(r"[\"\u201c\u201d']([-\u2212+]?\$?\d[\d.,]*\s?(?:%|pp|bp|[MBK]\b|/gal)?)[\"\u201c\u201d']")
 
 
+# 'ranks 3 of 3' does not say whether 3 is good: code writes what the rank means (rank 1 = best)
+RANK_N_OF_M = re.compile(r"\b(rank(?:s|ed|ing)?)\s+#?(\d+)\s*(?:of|out of|/)\s*(\d+)\b", re.IGNORECASE)
+
+
+def _rank_words(m: re.Match) -> str:
+    verb, n, total = m.group(1), int(m.group(2)), int(m.group(3))
+    if n == 1:
+        return f"{verb} best of {total}"
+    if n == total:
+        return f"{verb} worst of {total}"
+    return f"{verb} {n} of {total} (1 = best)"
+
+
 def _unquote(obj):
     """The model sometimes copies display values with their quotes ('cuts it by "-$417M"'): strip them,
     so the text reads normally and the sign/double-negative checks still see the number."""
@@ -625,6 +652,7 @@ def _unquote(obj):
     if not isinstance(obj, str):
         return obj
     obj = QUOTED_NUM.sub(r"\1", obj)
+    obj = RANK_N_OF_M.sub(_rank_words, obj)
     # 'fell -$354M' / 'cuts it by -$417M': the direction word already carries the sign, so drop the minus.
     # Only for DOWN words; 'rose -$354M' stays and is rejected (the direction itself would be wrong).
     return DOWN_MINUS.sub(lambda m: m.group(1) + m.group(2), obj)
@@ -792,6 +820,16 @@ def _peer_quarter(items: list[Insight]) -> str:
             m = QUARTER.search(c.summary + " " + " ".join(f.label for f in c.facts))
             if m:
                 return m.group(0)
+    return ""
+
+
+def _why_quarter(whys: list[Insight], text_: str) -> str:
+    """'Q3 2026 vs Q3 2025' for the calculated why the sentence is about (the KPI it names, else the first)."""
+    low = (text_ or "").lower()
+    for c in [c for c in whys if _names_metric(c, low)] or whys[:1]:
+        for f in c.facts:
+            if f.id.endswith(".change") and ", " in f.label:
+                return f.label.rsplit(", ", 1)[1]
     return ""
 
 

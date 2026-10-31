@@ -7,6 +7,10 @@ Sources (all free):
   GDELT - news articles per company + one industry query (last N days)    (no key)
   FMP   - daily share prices per company (free key in .env as FMP_API_KEY; skipped if missing).
           The key is masked in every log line and file: it never leaves .env.
+  Finnhub - company news WITH a short summary per article (free key FINNHUB_API_KEY; skipped if missing).
+  SEC documents - the latest 10-K and 10-Q of each company as published (HTML), for the
+          chatbot's text search (risk factors, management's discussion, market-risk section).
+          A filing never changes, so each document is downloaded once (named by accession number).
 
 Rules of the bronze layer
   1. Never edit raw data. Files are saved exactly as received.
@@ -43,7 +47,10 @@ GDELT_URL = ("https://api.gdeltproject.org/api/v2/doc/doc?query={query}&mode=art
              "&format=json&maxrecords={n}&sort=DateDesc&timespan={days}d")
 FMP_URL = ("https://financialmodelingprep.com/stable/historical-price-eod/full"
            "?symbol={symbol}&from={start}&to={end}&apikey={key}")
+FINNHUB_URL = "https://finnhub.io/api/v1/company-news?symbol={symbol}&from={start}&to={end}&token={key}"
+SEC_DOC_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{accn}/{doc}"
 FILING_FORMS = {"10-K", "10-Q", "10-K/A", "10-Q/A"}
+TEXT_FORMS = ("10-K", "10-Q")          # latest original of each (amendments often hold only exhibits)
 
 
 # --------------------------------------------------------------------------- HTTP
@@ -171,14 +178,45 @@ def parse_fmp_prices(raw: bytes, symbol: str) -> tuple[int, Optional[str]]:
     return len(rows), max(r["date"] for r in rows)
 
 
-def fmp_key() -> str:
+def api_key(name: str) -> str:
+    """Read a key from the environment / .env. Tolerates a pasted whole line ('NAME=...') and quotes."""
     from dotenv import load_dotenv
     from dashboard.config import PROJECT_ROOT
     load_dotenv(PROJECT_ROOT / ".env")
-    key = os.environ.get("FMP_API_KEY", "").strip().strip('"').strip("'")
-    if key.upper().startswith("FMP_API_KEY="):          # pasted the whole .env line as a secret
+    key = os.environ.get(name, "").strip().strip('"').strip("'")
+    if key.upper().startswith(name + "="):              # pasted the whole .env line as a secret
         key = key.split("=", 1)[1].strip().strip('"').strip("'")
     return key
+
+
+def fmp_key() -> str:
+    return api_key("FMP_API_KEY")
+
+
+def parse_finnhub(raw: bytes, symbol: str) -> tuple[int, Optional[str]]:
+    """Return (number of articles, date of the newest). Finnhub answers errors (bad key, plan
+    limit) with a JSON object instead of a list, which raises here."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        raise ValueError(f"Finnhub did not return JSON: {raw[:80]!r}")
+    if not isinstance(data, list):
+        raise ValueError(f"Finnhub error for {symbol}: {str(data)[:120]}")
+    stamps = [a["datetime"] for a in data if isinstance(a, dict) and a.get("datetime")]
+    latest = datetime.fromtimestamp(max(stamps), tz=timezone.utc).date().isoformat() if stamps else None
+    return len(data), latest
+
+
+def latest_text_filings(raw: bytes) -> list[dict]:
+    """From SEC submissions JSON: the newest 10-K and the newest 10-Q (accession, form, dates, document)."""
+    recent = json.loads(raw).get("filings", {}).get("recent", {})
+    out, seen, docs = [], set(), recent.get("primaryDocument") or []
+    for i, form in enumerate(recent.get("form", [])):          # newest first
+        if form in TEXT_FORMS and form not in seen and i < len(docs) and docs[i]:
+            seen.add(form)
+            out.append({"form": form, "accn": recent["accessionNumber"][i], "filed": recent["filingDate"][i],
+                        "period": recent["reportDate"][i], "doc": recent["primaryDocument"][i]})
+    return out
 
 
 def _mask(text: str, secret: str) -> str:
@@ -312,6 +350,64 @@ def fetch_prices(s: Settings, f: Fetcher, out_dir: Path, today: str, force=False
     return results
 
 
+def fetch_finnhub(s: Settings, f: Fetcher, out_dir: Path, today: str, force=False,
+                  key: str = "") -> list[FetchResult]:
+    """One Finnhub call per company: news of the last `lookback_days`, each with a summary.
+    No key, or switched off in settings -> skipped (nothing else breaks). The key is masked everywhere."""
+    if not key or not s.news.finnhub:
+        return []
+    end = date.fromisoformat(today)
+    start = end.fromordinal(end.toordinal() - s.news.lookback_days)
+    results = []
+    for c in s.in_scope:
+        rel = f"news/finnhub/{c.ticker}/{today}.json"
+        url = FINNHUB_URL.format(symbol=c.ticker, start=start, end=end, key=key)
+        res = FetchResult("news_finnhub", c.ticker, "OK", url=_mask(url, key), frequency="news")
+        try:
+            if _already_fetched(out_dir, rel, force):
+                raw, res.status, res.path = (out_dir / rel).read_bytes(), "SKIPPED", rel
+            else:
+                raw = f.get(url)
+            n, res.latest = parse_finnhub(raw, c.ticker)            # validate BEFORE saving
+            if res.status == "OK":
+                res.path, res.sha256 = _save(out_dir, rel, raw)
+            res.bytes, res.detail = len(raw), f"{n} articles with summaries in {s.news.lookback_days} days"
+        except Exception as e:
+            res.status, res.detail = "FAILED", _mask(str(e), key)
+        results.append(res)
+    return results
+
+
+def fetch_filing_docs(s: Settings, f: Fetcher, out_dir: Path, today: str) -> list[FetchResult]:
+    """The latest 10-K and 10-Q document of each company, read from today's submissions file.
+    Saved as sec/documents/<company>/<accession>.htm: downloaded once, never again."""
+    results = []
+    for c in s.in_scope:
+        folder = f"{c.ticker}_{c.cik10}"
+        sub = out_dir / "sec" / "submissions" / folder / f"{today}.json"
+        if not sub.exists():
+            continue
+        for x in latest_text_filings(sub.read_bytes()):
+            rel = f"sec/documents/{folder}/{x['accn']}.htm"
+            url = SEC_DOC_URL.format(cik=c.cik, accn=x["accn"].replace("-", ""), doc=x["doc"])
+            res = FetchResult("sec_document", c.ticker, "OK", url=url, latest=x["filed"],
+                              detail=f"{x['form']} for period {x['period']}")
+            try:
+                if (out_dir / rel).exists():
+                    res.status, res.path = "SKIPPED", rel
+                    res.bytes = (out_dir / rel).stat().st_size
+                else:
+                    raw = f.get(url)
+                    if b"<" not in raw[:2000]:
+                        raise ValueError("SEC document is not HTML")
+                    res.path, res.sha256 = _save(out_dir, rel, raw)
+                    res.bytes = len(raw)
+            except Exception as e:
+                res.status, res.detail = "FAILED", str(e)
+            results.append(res)
+    return results
+
+
 # --------------------------------------------------------------------------- freshness
 def freshness(results: list[FetchResult], s: Settings, today: date) -> list[dict]:
     report = []
@@ -332,7 +428,7 @@ def freshness(results: list[FetchResult], s: Settings, today: date) -> list[dict
 # --------------------------------------------------------------------------- run
 def run(s: Settings, fetcher: Fetcher, out_dir: Path, today: Optional[date] = None,
         force: bool = False, news_fetcher: Optional[Fetcher] = None,
-        price_key: Optional[str] = None) -> tuple[list[FetchResult], list[dict]]:
+        price_key: Optional[str] = None, news_key: Optional[str] = None) -> tuple[list[FetchResult], list[dict]]:
     today = today or date.today()
     stamp = today.isoformat()
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -343,6 +439,10 @@ def run(s: Settings, fetcher: Fetcher, out_dir: Path, today: Optional[date] = No
                + fetch_prices(s, Fetcher("exec-dashboard thesis", session=fetcher.session,   # no SEC email sent to FMP
                                          backoff=fetcher.backoff, min_interval=fetcher.min_interval),
                               out_dir, stamp, force, key=price_key or ""))
+    other = Fetcher("exec-dashboard thesis", session=fetcher.session, backoff=fetcher.backoff,
+                    min_interval=max(fetcher.min_interval, 1.1))       # Finnhub free plan: 60 calls/minute
+    results += fetch_finnhub(s, other, out_dir, stamp, force, key=news_key or "")
+    results += fetch_filing_docs(s, fetcher, out_dir, stamp)        # needs today's submissions file (above)
 
     with open(out_dir / "_manifest.jsonl", "a", encoding="utf-8") as fh:   # append-only log
         for r in results:
@@ -370,6 +470,8 @@ def _print(results: list[FetchResult], report: list[dict]) -> None:
     print(f"\n{len(results)} downloads · {failed} failed · {stale} stale")
     if not any(r.source == "prices" for r in results):
         print("Share prices skipped: FMP_API_KEY is not set (run scripts\\set_fmp_key.bat, or add the GitHub secret).")
+    if not any(r.source == "news_finnhub" for r in results):
+        print("Finnhub news skipped: FINNHUB_API_KEY is not set (add it to .env, or add the GitHub secret).")
 
 
 def main() -> None:
@@ -384,7 +486,7 @@ def main() -> None:
     # GDELT throttles bursts with HTTP 429 even at 1 request / 5 s, so go slower and wait longer
     news = Fetcher(s.project.sec_user_agent, min_interval=10.0, backoff=15.0, retries=4)
     results, report = run(s, Fetcher(s.project.sec_user_agent), out, force=args.force, news_fetcher=news,
-                          price_key=fmp_key())
+                          price_key=fmp_key(), news_key=api_key("FINNHUB_API_KEY"))
     _print(results, report)
     print(f"Saved to: {out}")
 

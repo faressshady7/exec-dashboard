@@ -2,7 +2,8 @@
 # (Supabase pauses free projects after 7 days without database activity).
 # Two scheduled times: GitHub sometimes delays or drops scheduled runs, so a second
 # slot runs only if the first one did not succeed that day. Can also be started by hand.
-# Secrets needed (repo Settings -> Secrets and variables -> Actions): DATABASE_URL, GEMINI_API_KEY, FMP_API_KEY.
+# Secrets needed (repo Settings -> Secrets and variables -> Actions): DATABASE_URL, GEMINI_API_KEY, FMP_API_KEY,
+# FINNHUB_API_KEY (news summaries; skipped if missing).
 name: daily-pipeline
 
 on:
@@ -43,6 +44,7 @@ jobs:
       DATABASE_URL: ${{ secrets.DATABASE_URL }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+      FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
       PYTHONPATH: src
       PYTHONUNBUFFERED: "1"
     steps:
@@ -58,6 +60,7 @@ jobs:
           if [ -z "$DATABASE_URL" ]; then echo "::error::DATABASE_URL secret is missing"; exit 1; fi
           if [ -z "$GEMINI_API_KEY" ]; then echo "::warning::GEMINI_API_KEY missing - the AI step will fail"; fi
           if [ -z "$FMP_API_KEY" ]; then echo "::warning::FMP_API_KEY missing - share prices are skipped"; fi
+          if [ -z "$FINNHUB_API_KEY" ]; then echo "::warning::FINNHUB_API_KEY missing - news summaries are skipped"; fi
 
       - name: Install libraries
         run: pip install -q -r requirements.txt

@@ -1,0 +1,11 @@
+# Chat page settings (streamlit run is started from the project folder)
+[client]
+toolbarMode = "viewer"          # hide the developer menu ("Deploy")
+
+[server]
+headless = true
+# port and address are set by scripts/run_chat.bat (localhost:8501, this computer only);
+# Streamlit Community Cloud sets its own when the page is hosted online
+
+[browser]
+gatherUsageStats = false        # no usage data sent to Streamlit

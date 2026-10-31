@@ -169,7 +169,7 @@ def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
     terms = load_settings().ai.flag_terms
     assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
     assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
-    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v7"
+    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v8"
 
 
 
@@ -498,3 +498,21 @@ def test_a_level_keeps_its_minus():
     t = lambda x: _unquote(Chapter(text=x, page=5)).text
     assert t("Free cash flow fell to -$351M in Q2 2026.") == "Free cash flow fell to -$351M in Q2 2026."
     assert t("Free cash flow fell -$815M to -$351M.") == "Free cash flow fell $815M to -$351M."
+
+
+def test_why_quarter_names_the_quarter_of_the_calculated_why():
+    from dashboard.ai import _why_quarter
+    from dashboard.insights import Fact, Insight
+    w = Insight(id="driver:operating_margin_pct", type="driver", title="Why operating margin changed", summary="",
+                facts=[Fact("why.operating_margin_pct.change", "Operating margin change, Q3 2026 vs Q3 2025", -1.1, "pp")],
+                significance=0.8, impact=0.9)
+    assert _why_quarter([w], "Operating margin fell 1.1 pp as fuel took 7.4 pp.") == "Q3 2026 vs Q3 2025"
+    assert _why_quarter([], "anything") == ""
+
+
+def test_rank_n_of_m_says_what_the_rank_means():
+    from dashboard.ai import RANK_N_OF_M, _rank_words
+    f = lambda s: RANK_N_OF_M.sub(_rank_words, s)
+    assert f("Free Cash Flow Ranks 3 of 3 with -$351M") == "Free Cash Flow Ranks worst of 3 with -$351M"
+    assert f("ranking 1 out of 3") == "ranking best of 3"
+    assert f("rank 2/3") == "rank 2 of 3 (1 = best)"

@@ -14,7 +14,7 @@ DB = os.environ.get("TEST_DATABASE_URL")
 def test_every_view_is_defined():
     assert {"kpi_latest", "kpi_trend", "market_today", "market_history", "whatif", "scenarios",
             "robustness", "assumptions", "news", "ai_brief", "freshness", "companies",
-            "stock_history", "valuation", "attention", "ai_recommendations"} == set(VIEWS)
+            "stock_history", "valuation", "attention", "ai_recommendations", "filing_text"} == set(VIEWS)
 
 
 @pytest.mark.skipif(not DB, reason="set TEST_DATABASE_URL to run database tests")
@@ -104,7 +104,7 @@ def test_views_build_on_gold_tables_and_survive_recompute():
     assert [r.ticker for r in val] == ["UAL", "DAL", "AAL"] and val[2].pe is None and "refinery" in val[1].caveat
     assert idx0 == (pytest.approx(100), 3)
     assert val[2].pe_text == "not meaningful (loss)" and val[0].market_cap_text.startswith("$") and val[0].market_cap_text.endswith("B")
-    assert {r.status for r in kl} <= {"BETTER THAN THE OTHER TWO", "WORSE THAN THE OTHER TWO", "IN LINE"} and kl[0].value_text.endswith("B")
+    assert {r.status for r in kl} <= {"BETTER THAN PEER AVERAGE", "WORSE THAN PEER AVERAGE", "IN LINE"} and kl[0].value_text.endswith("B")
     assert {r.page for r in att} == {"peer", "risk"} and att[0].rank == 1
     assert {r.kind for r in att if r.page == "risk"} == {"risk", "check"}          # alerts + estimate checks on page 3
     assert {r.company for r in att} == {"UAL", "DAL", "AAL"}                     # one set per company

@@ -18,6 +18,11 @@ Cleaning rules (each one is a thesis decision you can defend):
   Filings- 10-K, 10-Q, 8-K (+ amendments) with their 8-K item codes
            (2.02 = results of operations, i.e. an earnings release).
   News   - one row per (company, article URL); the same article fetched on two days is kept once.
+           Two providers: GDELT (headline only, widest coverage) and Finnhub (headline + summary).
+           Finnhub names the outlet ("Yahoo"), mapped to its domain so the same tier rules apply.
+           An empty or boilerplate summary ("email help@...") is stored as empty, never shown.
+  Filing text - the latest 10-K and 10-Q per company, cut into its risk-factor, MD&A and market-risk
+           sections, then into passages of about 1,500 characters for the chatbot's text search.
   Prices - one closing price per company per trading day (FMP; raw close, not dividend-adjusted).
   Shares - shares outstanding from each 10-K/10-Q cover page (dei:EntityCommonStockSharesOutstanding),
            dated at the cover date, newest filing wins. Used only for market cap.
@@ -40,6 +45,8 @@ import csv
 import io
 import json
 import re
+from html.parser import HTMLParser
+from urllib.parse import urlparse
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -117,6 +124,22 @@ ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS duplicate BOOLEAN;     
 ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS kept BOOLEAN;           -- relevant AND NOT blocked AND NOT duplicate
 ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS topic TEXT;            -- fuel / labour / results / ... / other
 ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS usable BOOLEAN;        -- passed the news test: the AI may use it
+ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS provider TEXT NOT NULL DEFAULT 'gdelt';   -- gdelt | finnhub
+ALTER TABLE silver.news_article ADD COLUMN IF NOT EXISTS summary TEXT;          -- Finnhub only (NULL if empty or boilerplate)
+
+CREATE TABLE IF NOT EXISTS silver.filing_passage (
+    accn        TEXT    NOT NULL,              -- SEC accession number of the 10-K / 10-Q
+    ticker      TEXT    NOT NULL,
+    form        TEXT    NOT NULL,
+    period_end  DATE,
+    filed       DATE,
+    section     TEXT    NOT NULL,              -- Risk factors | Management's discussion (MD&A) | Market risk
+    seq         INTEGER NOT NULL,              -- passage number within the section
+    text        TEXT    NOT NULL,
+    url         TEXT,
+    loaded_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (accn, section, seq)
+);
 
 CREATE TABLE IF NOT EXISTS silver.stock_price (
     ticker      TEXT NOT NULL,
@@ -568,8 +591,126 @@ def parse_news(raw: bytes, key: str) -> pd.DataFrame:
                      "domain": a.get("domain"), "language": a.get("language"),
                      "source_country": a.get("sourcecountry"),
                      "seen_at": datetime.strptime(seen, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
-                     if seen else None})
+                     if seen else None, "provider": "gdelt", "summary": None})
     return pd.DataFrame(rows).drop_duplicates(["company_key", "url"]) if rows else pd.DataFrame()
+
+
+def clean_summary(summary: str, n) -> Optional[str]:
+    """A real summary, or None: too short, or a boilerplate line such as 'For questions about this
+    article... email help@...' (seen in Finnhub's Yahoo/Trefis items, Oct 2026)."""
+    t = re.sub(r"\s+", " ", summary or "").strip()
+    if len(t) < n.summary_min_chars or any(b.lower() in t.lower() for b in n.summary_boilerplate):
+        return None
+    return t
+
+
+def parse_finnhub_news(raw: bytes, key: str, n) -> pd.DataFrame:
+    """Finnhub company news -> the same columns as GDELT + provider + summary."""
+    data = json.loads(raw) if raw.strip() else []
+    rows = []
+    for a in data if isinstance(data, list) else []:
+        if not a.get("url") or not a.get("headline"):
+            continue
+        src = (a.get("source") or "").strip()
+        domain = n.finnhub_sources.get(src) or (urlparse(a["url"]).hostname or "").removeprefix("www.")
+        rows.append({"company_key": key, "url": a["url"], "title": a["headline"], "domain": domain,
+                     "language": "english", "source_country": None,
+                     "seen_at": datetime.fromtimestamp(a["datetime"], tz=timezone.utc) if a.get("datetime") else None,
+                     "provider": "finnhub", "summary": clean_summary(a.get("summary"), n)})
+    return pd.DataFrame(rows).drop_duplicates(["company_key", "url"]) if rows else pd.DataFrame()
+
+
+# =========================================================================== filing text
+FILING_SECTIONS = {   # (section name, its heading) - matched at the start of a line
+    "10-K": [("Risk factors", r"item\s*1a\b\W*risk\s+factors"),
+             ("Management's discussion (MD&A)", r"item\s*7\b\W*management"),
+             ("Market risk", r"item\s*7a\b\W*quantitative")],
+    "10-Q": [("Management's discussion (MD&A)", r"item\s*2\b\W*management"),
+             ("Market risk", r"item\s*3\b\W*quantitative"),
+             ("Risk factors", r"item\s*1a\b\W*risk\s+factors")],
+}
+NEXT_ITEM = r"(?im)^\s*item\s*\d{1,2}[a-c]?\b"      # a section ends at the next item heading, whatever its number
+PASSAGE_CHARS = 1500
+MAX_PASSAGES = 300                         # per section: keeps one 10-K well under 1 MB of text
+
+
+class _Text(HTMLParser):
+    """HTML -> plain text, one line per block element. Skips scripts, styles and the hidden
+    inline-XBRL header (ix:header) that SEC documents carry."""
+    BLOCK = {"p", "div", "br", "tr", "li", "h1", "h2", "h3", "h4", "h5", "h6", "table", "section"}
+    CELL = {"td", "th"}                               # table cells: a space, so "Risk Factors" + "12" stay apart
+    SKIP = {"script", "style", "ix:header", "head", "title"}
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.skip = 0
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.SKIP:
+            self.skip += 1
+        elif tag in self.BLOCK:
+            self.parts.append("\n")
+        elif tag in self.CELL:
+            self.parts.append(" ")
+
+    def handle_endtag(self, tag):
+        if tag in self.SKIP:
+            self.skip = max(0, self.skip - 1)
+        elif tag in self.BLOCK:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        if not self.skip:
+            self.parts.append(data)
+
+
+def html_to_text(raw: bytes) -> str:
+    p = _Text()
+    p.feed(raw.decode("utf-8", errors="replace"))
+    lines = [re.sub(r"\s+", " ", x).strip() for x in "".join(p.parts).replace("\xa0", " ").split("\n")]
+    return "\n".join(x for x in lines if x)
+
+
+def find_sections(text_: str, form: str) -> dict[str, str]:
+    """Each section = from its heading to the next item heading. The table of contents also lists
+    the headings, so the LONGEST match wins (a contents entry is one line, the real section pages)."""
+    out = {}
+    for name, start in FILING_SECTIONS.get(form.split("/")[0], []):
+        best = ""
+        for m in re.finditer(rf"(?im)^\s*{start}", text_):
+            e = re.search(NEXT_ITEM, text_[m.end():])
+            body = text_[m.start(): m.end() + (e.start() if e else len(text_) - m.end())]
+            best = body if len(body) > len(best) else best
+        if len(best) > 300:                      # a heading with no text = not found
+            out[name] = best
+    return out
+
+
+def passages(section: str, size: int = PASSAGE_CHARS) -> list[str]:
+    """Whole paragraphs, packed up to `size` characters (a long paragraph is cut at sentence ends)."""
+    out, cur = [], ""
+    for para in section.split("\n"):
+        if re.fullmatch(r"(?i)table of contents|\d{1,3}", para.strip()):     # page footers in SEC documents
+            continue
+        for piece in (re.split(r"(?<=[.;])\s+", para) if len(para) > size else [para]):
+            if cur and len(cur) + len(piece) + 1 > size:
+                out.append(cur)
+                cur = ""
+            cur = f"{cur}\n{piece}" if cur else piece
+    if cur:
+        out.append(cur)
+    return [p for p in out if len(p) >= 80][:MAX_PASSAGES]
+
+
+def filing_passages(raw: bytes, meta: dict, ticker: str, url: str) -> pd.DataFrame:
+    rows = []
+    for name, body in find_sections(html_to_text(raw), meta["form"]).items():
+        for i, p in enumerate(passages(body)):
+            rows.append({"accn": meta["accn"], "ticker": ticker, "form": meta["form"],
+                         "period_end": meta["period"] or None, "filed": meta["filed"], "section": name,
+                         "seq": i + 1, "text": p, "url": url})
+    return pd.DataFrame(rows)
 
 
 # =========================================================================== news filter
@@ -642,7 +783,11 @@ def classify_news(df: pd.DataFrame, s: Settings) -> pd.DataFrame:
     df["norm_title"] = df["title"].map(normalize_title)
     df["tier"] = df["domain"].map(lambda d: news_tier(d, f))
     df["blocked"] = df["domain"].map(lambda d: _domain_in(d, f.blocklist))
-    df["relevant"] = [headline_relevant(t, f.headline_terms.get(k, [])) for t, k in zip(df["title"], df["company_key"])]
+    summ = df["summary"] if "summary" in df else pd.Series([None] * len(df), index=df.index)
+    # relevant = a company/industry term in the headline, or (Finnhub) in its summary
+    df["relevant"] = [headline_relevant(t, f.headline_terms.get(k, [])) or
+                      (isinstance(sm, str) and headline_relevant(sm, f.headline_terms.get(k, [])))
+                      for t, k, sm in zip(df["title"], df["company_key"], summ)]
     df["duplicate"] = False
     cand = df[df["relevant"] & ~df["blocked"]].sort_values(["tier", "seen_at"])
     dup_idx = cand[cand.duplicated(["company_key", "norm_title"], keep="first")].index
@@ -690,7 +835,7 @@ def refilter_news(eng: Engine, s: Settings) -> dict:
     """Re-tag ALL stored articles (so changing the lists in settings.yaml applies to history)."""
     with eng.connect() as con:
         df = pd.DataFrame(con.execute(text(
-            "SELECT company_key, url, title, domain, seen_at FROM silver.news_article")).mappings().all())
+            "SELECT company_key, url, title, domain, seen_at, summary FROM silver.news_article")).mappings().all())
     if df.empty:
         return {"total": 0}
     df = classify_news(df, s)
@@ -830,10 +975,45 @@ def run(s: Settings, eng: Engine, bronze: Path) -> dict:
         f = latest_file(bronze / "news" / "gdelt" / key, "*.json")
         if f:
             frames.append(parse_news(f.read_bytes(), key))
+    for c in s.in_scope:                                     # Finnhub: same table, provider = finnhub
+        f = latest_file(bronze / "news" / "finnhub" / c.ticker, "*.json")
+        if f:
+            frames.append(parse_finnhub_news(f.read_bytes(), c.ticker, s.news))
     news = pd.concat([x for x in frames if not x.empty], ignore_index=True) if frames else pd.DataFrame()
     report["news_article"] = upsert(eng, "silver.news_article", news, ["company_key", "url"])
+    report["filing_passage"] = load_filing_text(eng, s, bronze)
     report["news_funnel"] = refilter_news(eng, s)
     return report
+
+
+def load_filing_text(eng: Engine, s: Settings, bronze: Path) -> int:
+    """Replace each company's passages with those of its latest 10-K and 10-Q (older ones removed).
+    A company whose documents are missing today keeps yesterday's passages."""
+    from dashboard.bronze import SEC_DOC_URL, latest_text_filings
+    frames, keep, done = [], [], set()
+    for c in s.in_scope:
+        folder = f"{c.ticker}_{c.cik10}"
+        sub = latest_file(bronze / "sec" / "submissions" / folder, "*.json")
+        if not sub:
+            continue
+        for m in latest_text_filings(sub.read_bytes()):
+            doc = bronze / "sec" / "documents" / folder / f"{m['accn']}.htm"
+            if doc.exists():
+                url = SEC_DOC_URL.format(cik=c.cik, accn=m["accn"].replace("-", ""), doc=m["doc"])
+                frames.append(filing_passages(doc.read_bytes(), m, c.ticker, url))
+                keep.append(m["accn"])
+                done.add(c.ticker)
+    df = _concat(frames)
+    if not keep:
+        return 0
+    with eng.begin() as con:                                 # all or nothing
+        con.execute(text("DELETE FROM silver.filing_passage WHERE ticker = ANY(:t)"), {"t": sorted(done)})
+        if not df.empty:
+            con.execute(text("""INSERT INTO silver.filing_passage (accn, ticker, form, period_end, filed, section, seq, text, url)
+                                VALUES (:accn, :ticker, :form, :period_end, :filed, :section, :seq, :text, :url)"""),
+                        df.astype(object).where(df.notna(), None).to_dict("records"))
+    _log(eng, "filing_passage", len(df), keep)
+    return len(df)
 
 
 def coverage(eng: Engine, s: Settings) -> pd.DataFrame:
