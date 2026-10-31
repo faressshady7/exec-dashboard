@@ -351,6 +351,8 @@ stocks:
 chat:
   model: null                # null = same model as ai.model
   thinking_level: low        # model 'thinking' per call: minimal | low | medium | high (less = faster)
+  request_timeout_s: 30      # give up on a hanging model call after this (the backup model answers)
+  busy_cooldown_s: 300       # a model that was busy/timed out is skipped for 5 minutes
   max_rounds: 4              # tool-calling rounds per question
   history_turns: 4           # earlier questions sent along, so follow-up questions work
   max_question_chars: 600

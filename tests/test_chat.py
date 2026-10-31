@@ -418,3 +418,43 @@ def test_tool_text_avoids_double_negatives_and_misleading_rank_labels(s):
     k = FakeTools(s).call("get_kpis", {"company": "UAL"})
     assert k.data[0]["versus_other_airlines_average"] == "worse than the other airlines' average"
     assert "OTHER TWO" not in str(k.data)
+
+
+# --------------------------------------------------------------------------- speed: busy model is skipped
+def test_busy_model_skipped_for_cooldown(monkeypatch):
+    from dashboard.chat import GeminiChat
+
+    class FakeModels:
+        def __init__(self):
+            self.calls = []
+
+        def generate_content(self, model, contents, config):
+            self.calls.append(model)
+            if model == "main":
+                raise RuntimeError("429 RESOURCE_EXHAUSTED")
+            return "ok"
+
+    g = GeminiChat.__new__(GeminiChat)
+    g.models, g.timings, g.cooldown, g.skip_until = ["main", "backup"], [], 300, {}
+    g.client = type("C", (), {"models": FakeModels()})()
+    assert g._generate([], None) == "ok"
+    assert g._generate([], None) == "ok"
+    assert g.client.models.calls == ["main", "backup", "backup"]      # main not retried within the cooldown
+    g.skip_until["main"] = 0                                            # cooldown over -> main is tried again
+    g._generate([], None)
+    assert g.client.models.calls[-2:] == ["main", "backup"]
+
+
+def test_timeout_counts_as_busy():
+    from dashboard.chat import GeminiChat
+
+    class FakeModels:
+        def generate_content(self, model, contents, config):
+            if model == "main":
+                raise TimeoutError("ReadTimeout: The read operation timed out")
+            return "ok"
+
+    g = GeminiChat.__new__(GeminiChat)
+    g.models, g.timings, g.cooldown, g.skip_until = ["main", "backup"], [], 300, {}
+    g.client = type("C", (), {"models": FakeModels()})()
+    assert g._generate([], None) == "ok" and "main" in g.skip_until

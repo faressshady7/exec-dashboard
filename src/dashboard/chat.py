@@ -38,6 +38,7 @@ from dashboard.config import PROJECT_ROOT, Settings, load_settings
 from dashboard.insights import Fact, fmt
 
 # =========================================================================== rails
+LOADED_AT = time.time()          # the chat page reloads this file when it changes
 GENERAL_LABEL = "General knowledge (not from your data):"
 REFUSE_SECURITY = ("I can't help with that. I only answer questions about the companies, their peers, "
                    "the airline industry and the related news, using the dashboard's data.")
@@ -378,9 +379,10 @@ class GeminiChat(ChatModel):
         if not key:
             raise SystemExit("No GEMINI_API_KEY in .env - run scripts\\set_gemini_key.bat")
         self.types = types
-        self.client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=s.ai.request_timeout_s * 1000))
+        self.client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=s.chat.request_timeout_s * 1000))
         self.cfg, self.models = s.ai, [m for m in (s.chat.model or s.ai.model, s.ai.fallback_model) if m]
         self.timings, self.thinking = [], s.chat.thinking_level
+        self.cooldown, self.skip_until = s.chat.busy_cooldown_s, {}   # model -> time it may be tried again
         self.name = self.models[0]
 
     def _config(self, system: str, tools: list[dict] | None):
@@ -396,8 +398,11 @@ class GeminiChat(ChatModel):
         return t.GenerateContentConfig(**kw)
 
     def _generate(self, contents, config):
-        busy = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out")
-        for i, model in enumerate(self.models):
+        busy = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out", "timeout")
+        now = time.time()
+        # a model that was busy or hung a moment ago is skipped for a while (the last one is always tried)
+        models = [m for m in self.models[:-1] if self.skip_until.get(m, 0) <= now] + self.models[-1:]
+        for i, model in enumerate(models):
             t0 = time.time()
             try:
                 self.name = model
@@ -405,8 +410,9 @@ class GeminiChat(ChatModel):
                 self.timings.append(f"{model} {time.time() - t0:.1f}s")
                 return r
             except Exception as e:
-                self.timings.append(f"{model} FAILED after {time.time() - t0:.1f}s: {str(e)[:60]}")
-                if i + 1 < len(self.models) and any(b.lower() in str(e).lower() for b in busy):
+                self.timings.append(f"{model} FAILED after {time.time() - t0:.1f}s: {str(e)[:40]}")
+                if i + 1 < len(models) and any(b.lower() in str(e).lower() for b in busy):
+                    self.skip_until[model] = time.time() + self.cooldown
                     continue                                  # main model busy -> backup model
                 raise
 

@@ -9,6 +9,7 @@ Needs in .env: GEMINI_API_KEY, CHAT_DATABASE_URL (read-only chat_reader role), o
 from __future__ import annotations
 
 import hmac
+import importlib
 import os
 import sys
 import time
@@ -20,8 +21,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))       # streamlit r
 import streamlit as st
 from dotenv import load_dotenv
 
-from dashboard.chat import GeminiChat, Tools, answer, chat_engine, log
-from dashboard.config import PROJECT_ROOT, load_settings
+import dashboard.chat
+import dashboard.config
+
+
+def fresh(mod):
+    """The chat page server keeps running for days: reload a module whose file was updated since it loaded."""
+    if Path(mod.__file__).stat().st_mtime > getattr(mod, "LOADED_AT", 0):
+        mod = importlib.reload(mod)
+    return mod
+
+
+config = fresh(dashboard.config)
+PROJECT_ROOT, load_settings = config.PROJECT_ROOT, config.load_settings
 
 load_dotenv(PROJECT_ROOT / ".env")
 PAGE_NAMES = ["Executive Briefing", "Peer Benchmark", "Risk Drivers", "What-if", "Company Detail"]
@@ -60,12 +72,13 @@ gate()
 # ---------------------------------------------------------------- backend (once per server)
 @st.cache_resource
 def backend(code_version: str):            # a new version string reloads the chat code without a restart
-    eng = chat_engine()
-    return eng, Tools(s, eng), GeminiChat(s)
+    chat = fresh(dashboard.chat)                       # pick up an updated chat.py in a running server
+    eng = chat.chat_engine()
+    return chat, eng, chat.Tools(s, eng), chat.GeminiChat(s)
 
 
 try:
-    eng, tools, model = backend("2026-10-31")
+    chat, eng, tools, model = backend("2026-10-31c")
 except SystemExit as e:                                 # missing key / wrong account: say what to fix
     st.error(f"Chat is not set up yet: {e}")
     st.stop()
@@ -96,6 +109,9 @@ def show(q, r) -> None:
         st.markdown(r.answer.replace("$", "\\$"))     # '$' would start a maths formula in Markdown
         if r.outcome in BADGE:
             st.caption(BADGE[r.outcome])
+        timing = next((f for f in r.flags if f.startswith("timing")), None)
+        if timing:                                     # where the wait came from (for tuning speed)
+            st.caption(f"Answered in {r.latency_ms / 1000:.0f}s · {timing}")
         if r.sources:
             with st.expander("Sources"):
                 for src in r.sources:
@@ -134,7 +150,7 @@ if question:
         ss.times.append(time.time())
         with st.spinner("Looking at the data…"):
             hist = [(q, r.answer) for q, r in ss.turns]
-            r = answer(question, ticker, s, tools, model, page=page, history=hist)
-        log(eng, r, question, ticker, page, ss.sid)
+            r = chat.answer(question, ticker, s, tools, model, page=page, history=hist)
+        chat.log(eng, r, question, ticker, page, ss.sid)
         ss.turns.append((question, r))
         show(question, r)

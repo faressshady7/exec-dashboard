@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 from datetime import date
 from pathlib import Path
 from typing import Literal, Optional
@@ -16,6 +17,7 @@ import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+LOADED_AT = time.time()        # the chat page reloads this file when it changes
 DEFAULT_PATH = PROJECT_ROOT / "config" / "settings.yaml"
 
 Category = Literal["cost", "market", "fx", "rates", "macro", "demand", "uncertainty"]
@@ -201,6 +203,10 @@ class ChatSettings(BaseModel):
     """Chatbot (dashboard Q&A). Same model family as the AI layer; limits keep the free quota safe."""
     model: Optional[str] = None                    # None = ai.model
     thinking_level: Optional[Literal["minimal", "low", "medium", "high"]] = "low"   # less thinking = faster answers
+    # A chat answer should arrive in seconds: a model call that hangs is given up after request_timeout_s
+    # (then the backup model answers), and a model that was busy or timed out is skipped for busy_cooldown_s.
+    request_timeout_s: int = Field(default=30, ge=5, le=120)
+    busy_cooldown_s: int = Field(default=300, ge=0, le=3600)
     max_rounds: int = Field(default=4, ge=1, le=8)            # tool-calling rounds per question
     history_turns: int = Field(default=4, ge=0, le=10)        # earlier Q&A pairs sent for follow-ups
     max_question_chars: int = Field(default=600, ge=50, le=4000)
