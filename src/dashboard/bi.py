@@ -36,11 +36,11 @@ VIEWS: dict[str, str] = {
         FROM x CROSS JOIN LATERAL (SELECT CASE
                  WHEN x.own_peer_avg IS NULL THEN 'NO COMPARISON'
                  WHEN abs(x.value - x.own_peer_avg) <= 0.02 * abs(x.own_peer_avg) THEN 'IN LINE'
-                 WHEN (x.value > x.own_peer_avg) = (x.better = 'higher') THEN 'BETTER THAN THE OTHER TWO'
-                 ELSE 'WORSE THAN THE OTHER TWO' END AS status) st
+                 WHEN (x.value > x.own_peer_avg) = (x.better = 'higher') THEN 'BETTER THAN PEER AVERAGE'
+                 ELSE 'WORSE THAN PEER AVERAGE' END AS status) st
         CROSS JOIN LATERAL (SELECT st.status,
-                 CASE st.status WHEN 'BETTER THAN THE OTHER TWO' THEN '#2E6B4F' WHEN 'WORSE THAN THE OTHER TWO' THEN '#A33A3A' ELSE '#5F6670' END AS status_color,
-                 CASE st.status WHEN 'BETTER THAN THE OTHER TWO' THEN '#DCEBDF' WHEN 'WORSE THAN THE OTHER TWO' THEN '#F3D9D9' ELSE '#E6E2DC' END AS status_bg) s""",
+                 CASE st.status WHEN 'BETTER THAN PEER AVERAGE' THEN '#2E6B4F' WHEN 'WORSE THAN PEER AVERAGE' THEN '#A33A3A' ELSE '#5F6670' END AS status_color,
+                 CASE st.status WHEN 'BETTER THAN PEER AVERAGE' THEN '#DCEBDF' WHEN 'WORSE THAN PEER AVERAGE' THEN '#F3D9D9' ELSE '#E6E2DC' END AS status_bg) s""",
 
     # KPI trend lines (last N years), unusual quarters marked
     "kpi_trend": f"""
@@ -104,10 +104,13 @@ VIEWS: dict[str, str] = {
 
     # Precomputed scenarios: sensitivity grid, combined, historical replays
     "scenarios": """
+        -- impact_text = effect on operating income (fuel); rate_impact_text = interest cost (pre-tax), kept apart
         SELECT bi.short_name(c.name) AS company, c.sort_order, s.*, bi.fmt(s.impact_q, 'USD') AS impact_text,
-               CASE WHEN s.within_past_range THEN 'SEEN BEFORE' ELSE 'BIGGER THAN ANY PAST MOVE' END AS range_label,
-               CASE WHEN s.within_past_range THEN '#2E6B4F' ELSE '#8A5A00' END AS range_color,
-               CASE WHEN s.within_past_range THEN '#DCEBDF' ELSE '#FBEFD3' END AS range_bg
+               bi.fmt(s.rate_impact_q, 'USD') AS rate_impact_text,
+               CASE WHEN s.scenario_type = 'historical' THEN 'PAST MOVE, REPLAYED'
+                    WHEN s.within_past_range THEN 'SEEN BEFORE' ELSE 'BIGGER THAN ANY PAST MOVE' END AS range_label,
+               CASE WHEN s.scenario_type = 'historical' THEN '#5F6670' WHEN s.within_past_range THEN '#2E6B4F' ELSE '#8A5A00' END AS range_color,
+               CASE WHEN s.scenario_type = 'historical' THEN '#E6E2DC' WHEN s.within_past_range THEN '#DCEBDF' ELSE '#FBEFD3' END AS range_bg
         FROM gold.scenario s JOIN gold.dim_company c USING (ticker)""",
 
     "robustness": """SELECT * FROM gold.robustness""",

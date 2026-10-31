@@ -57,7 +57,7 @@ ASSUMPTIONS = [
     "No reaction: fares, capacity and hedging are assumed unchanged; in reality airlines respond, "
     "so large shocks are likely overstated.",
     "Combined shocks are added together; interactions between them are ignored.",
-    "Rate changes affect interest cost, not operating income.",
+    "Rate changes affect interest cost (pre-tax income), not operating income, so they are shown separately.",
 ]
 
 # KPI catalogue: label, unit, which direction is better (for ranking and colour)
@@ -543,8 +543,8 @@ def historical_moves(mkt: pd.DataFrame, s: Settings) -> list[dict]:
         if pd.isna(f0) or pd.isna(f1):
             continue
         name = sc.name
-        if not sc.start and not sc.end:          # the rolling episode: name it by its real dates, not a fixed label
-            name = f"{sc.name.split(',')[0]} ({start:%b %Y}-{end:%b %Y})"
+        if not sc.start and not sc.end:          # the rolling episode: a REPEAT of the past year from today's level
+            name = f"Last 12 months repeated from today ({start:%b %Y}-{end:%b %Y} moves)"
         out.append({"scenario": name, "start": start.date(), "end": end.date(), "note": sc.note,
                     "fuel_pct": (f1 / f0 - 1) * 100, "rate_bp": 0.0 if pd.isna(r0) or pd.isna(r1) else (r1 - r0) * 100})
     return out
@@ -558,15 +558,18 @@ def scenario_grid(sens: pd.DataFrame, ranges: dict | None = None, history: list[
     def row(t, stype, name, factor, shock, unit, fuel_pct, rate_bp, extra=None):
         r = what_if(sens, t, fuel_pct=fuel_pct, rate_bp=rate_bp, ranges=ranges)
         rate_only = factor == "fed_funds"
-        impact = (r["rate_impact_q"] if r["rate_modelled"] else np.nan) if rate_only else \
-                 r["fuel_impact_q"] if factor == "jet_fuel" else r["total_impact_q"]
+        # impact_q = the effect on OPERATING income (fuel only); rates change interest cost, which is below
+        # operating income, so for combined and historical rows it is kept apart (rate_impact_q, pretax_impact_q)
+        impact = (r["rate_impact_q"] if r["rate_modelled"] else np.nan) if rate_only else r["fuel_impact_q"]
         rows.append({"ticker": t, "scenario_type": stype, "scenario": name, "factor": factor,
                      "shock": shock, "shock_unit": unit, "fuel_pct": fuel_pct, "rate_bp": rate_bp,
                      "impact_q": impact, "fuel_impact_q": r["fuel_impact_q"],
                      "rate_impact_q": r["rate_impact_q"] if r["rate_modelled"] else np.nan,
+                     "pretax_impact_q": r["total_impact_q"],
                      "operating_income_q": np.nan if rate_only else r["operating_income_q"],
                      "operating_margin_pct": np.nan if rate_only else r["operating_margin_pct"],
-                     "within_past_range": r["within_past_range"], **(extra or {})})
+                     # a past episode is by definition a move that happened: no "seen before" test for it
+                     "within_past_range": None if stype == "historical" else r["within_past_range"], **(extra or {})})
 
     for t in sens["ticker"].unique():
         for shock in FUEL_SHOCKS:

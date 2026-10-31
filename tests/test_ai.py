@@ -169,7 +169,7 @@ def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
     terms = load_settings().ai.flag_terms
     assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
     assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
-    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v7"
+    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v8"
 
 
 

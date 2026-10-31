@@ -2,6 +2,7 @@
 import numpy as np
 import pandas as pd
 import pytest
+from datetime import date
 
 from dashboard.compute import (compute_kpis, market_snapshot, ols, peer_gaps, scenario_grid,
                                sensitivities, what_if)
@@ -215,8 +216,22 @@ def test_past_range_flag_combined_and_historical_scenarios():
     grid = scenario_grid(sens, ranges, hist)
     h = grid[(grid.scenario_type == "historical") & (grid.ticker == "UAL")].iloc[0]
     assert h["impact_q"] == pytest.approx(-30e6 * 100, rel=1e-6)          # -$30M per 1% x +100%
-    assert h["within_past_range"] is False or h["within_past_range"] == False
+    assert h["within_past_range"] is None                                  # a past episode happened: no "seen before" test
     assert (grid.scenario_type == "combined").sum() == 3 * 4
+
+
+def test_scenario_impact_is_operating_income_rates_kept_apart():
+    """Rates change interest cost (below operating income): impact_q = fuel only, pre-tax total kept apart."""
+    sens = pd.DataFrame([
+        {"ticker": "UAL", "factor": "jet_fuel", "impact_per_unit_q": -40e6, "base_operating_income_q": 1.5e9, "base_revenue_q": 15e9},
+        {"ticker": "UAL", "factor": "fed_funds", "impact_per_unit_q": -0.5e6, "base_operating_income_q": 1.5e9, "base_revenue_q": 15e9}])
+    grid = scenario_grid(sens, None, [{"scenario": "ep", "start": date(2022, 1, 1), "end": date(2022, 6, 30),
+                                        "note": "", "fuel_pct": 10.0, "rate_bp": 100.0}])
+    for stype in ("combined", "historical"):
+        r = grid[(grid.scenario_type == stype) & (grid.fuel_pct == 10) & (grid.rate_bp == 100)].iloc[0]
+        assert r["impact_q"] == pytest.approx(-400e6) and r["rate_impact_q"] == pytest.approx(-50e6)
+        assert r["pretax_impact_q"] == pytest.approx(-450e6)
+        assert r["operating_income_q"] == pytest.approx(1.1e9)          # base + fuel effect, rates not in it
 
 
 # ---------------------------------------------------------------- drivers ("why")

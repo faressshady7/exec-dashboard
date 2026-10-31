@@ -106,8 +106,8 @@ KPI_CODES = ("revenue", "revenue_yoy_pct", "operating_margin_pct", "net_margin_p
              "liquidity")
 SECTIONS = ("Risk factors", "Management's discussion (MD&A)", "Market risk")
 # the dashboard's pill compares with the AVERAGE of the other airlines, not with each one ("2 of 3" can be above it)
-STATUS = {"BETTER THAN THE OTHER TWO": "better than the other airlines' average",
-          "WORSE THAN THE OTHER TWO": "worse than the other airlines' average",
+STATUS = {"BETTER THAN PEER AVERAGE": "better than the other airlines' average",
+          "WORSE THAN PEER AVERAGE": "worse than the other airlines' average",
           "IN LINE": "in line with the other airlines' average", "NO COMPARISON": "no comparison available"}
 
 
@@ -268,8 +268,8 @@ class Tools:
                 seen &= _num(lo) <= v <= _num(hi)
         facts = [Fact("wi:fuel", "fuel change", fuel, "%"), Fact("wi:rate", "rate change", rate, "bp"),
                  Fact("wi:fuel_impact", "estimated fuel effect per quarter", fuel_imp, "USD"),
-                 Fact("wi:rate_impact", "estimated interest effect per quarter", rate_imp, "USD"),
-                 Fact("wi:total", "estimated total effect per quarter", fuel_imp + rate_imp, "USD"),
+                 Fact("wi:rate_impact", "estimated interest cost effect per quarter (pre-tax income, not operating income)", rate_imp, "USD"),
+                 Fact("wi:total", "estimated total effect on pre-tax income per quarter", fuel_imp + rate_imp, "USD"),
                  Fact("wi:base_op", "operating income in the base quarter", base_op, "USD"),
                  Fact("wi:new_op", "estimated operating income", op, "USD"),
                  Fact("wi:margin", "estimated operating margin", margin, "%"),

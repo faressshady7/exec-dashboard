@@ -33,7 +33,7 @@ from sqlalchemy.engine import Engine
 from dashboard.config import AISettings, PROJECT_ROOT, Settings, load_settings
 from dashboard.insights import Fact, Insight, build_candidates, narrative_facts, news_items, news_line, recency, score
 
-PROMPT_VERSION = "v7"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
+PROMPT_VERSION = "v8"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026): page briefs + options to consider;
                         # v4 (20 Oct 2026): storytelling - brief as Situation/Complication/Resolution, chart captions, start here
                         # v5 (25 Oct 2026): action title + so-what caption per chart, chart-specific evidence,
                         #   every item number-checked on its own (one bad caption no longer discards the rest)
@@ -42,6 +42,8 @@ PROMPT_VERSION = "v7"   # v2: rule 6 (estimates, never "will"); v3 (19 Oct 2026)
                         # v7 (26 Oct 2026): story layer - page-1 chapters, page stories (what / why from the
                         #   calculated drivers / one tested headline by id / what to do / next), brief as
                         #   what happened / why / what to do; 'because' only where the arithmetic backs it
+                        # v8 (31 Oct 2026): quarters named when mixed, ranks say what 1 means, 'partly offset' vs
+                        #   'cancelled out', page 5 may explain the operating margin
 
 SYSTEM = """You are a briefing analyst for airline executives.
 Rules you must follow:
@@ -114,7 +116,7 @@ class Captions(BaseModel):
 
 
 CHARTS = {"jet_fuel": "page 1: jet fuel price over 10 years",
-          "share_price": "page 2: share prices of the three airlines, rebased to 100 three years ago",
+          "share_price": "page 2: share prices of the three airlines, rebased to 100 three years ago (so the title must use the 3-year change, not the 1-year return)",
           "valuation": "page 2: market value, net debt and price/earnings of the three airlines",
           "peer_bars": "page 2: operating margin of the three airlines, same quarter (a fuel-share chart sits next to it)",
           "sensitivity": "page 3: estimated effect on quarterly operating income of +10% jet fuel and +1 point rates",
@@ -184,7 +186,7 @@ PAGE_WHAT = {"page_briefing": ("market_position", "exposure", "peer_gap", "trend
 # which calculated 'why' each page explains
 PAGE_DRIVER = {"page_briefing": ("operating_margin_pct", "operating_income"), "page_peers": ("operating_margin_pct",),
                "page_risks": ("operating_margin_pct", "operating_income"), "page_whatif": ("operating_income",),
-               "page_detail": ("free_cash_flow", "net_debt")}
+               "page_detail": ("operating_margin_pct", "free_cash_flow", "net_debt")}
 # news topics that may sit next to a driver (code decides which headline can go with which number)
 DRIVER_TOPICS = {"fuel": ("fuel",), "other_costs": ("labour", "operations"), "revenue": ("demand", "results"),
                  "special_items": ("results",), "operating_cash_flow": ("results", "demand"),
@@ -385,7 +387,12 @@ def round3_prompt(items: list[Insight], company: str, feedback: str = "", news: 
             f"episodes; page 2: the gap vs peers; page 5: how the KPIs moved).\n"
             f"   - why: one sentence from the page's 'why' insights (calculated by code). Say 'mostly because' ONLY when "
             f"that insight's summary says 'mostly because', and name the same driver. If it says 'no single driver' or "
-            f"'cancelled out', say that instead. Never give any other cause.\n"
+            f"'cancelled out', say that instead. Never give any other cause. Keep the direction of the change "
+            f"(rose / fell) and say 'partly offset' unless the parts really cancel to about zero.\n"
+            f"   - Quarters: every number belongs to a quarter. If one sentence or one brief uses numbers from different "
+            f"quarters, name each quarter; never present a later quarter's change under an earlier quarter's heading.\n"
+            f"   - Ranks: rank 1 = best. Say what the rank means ('the highest of the three', 'the best of three'), "
+            f"never only 'ranks third'.\n"
             f"   - news_id: the id of ONE headline below whose topic is allowed for this page, or empty. Do not write the "
             f"headline yourself; it is shown as written, with its source and date.\n"
             f"   - todo and next_page: leave empty (written by code).\n\n"
