@@ -78,7 +78,9 @@ def backend(code_version: str):            # a new version string reloads the ch
 
 
 try:
-    chat, eng, tools, model = backend("2026-10-31c")
+    # keyed on the chat code's and settings' file times: an updated chat.py or settings.yaml loads by itself
+    code_version = "|".join(str(Path(f).stat().st_mtime) for f in (dashboard.chat.__file__, config.DEFAULT_PATH))
+    chat, eng, tools, model = backend(code_version)
 except SystemExit as e:                                 # missing key / wrong account: say what to fix
     st.error(f"Chat is not set up yet: {e}")
     st.stop()
