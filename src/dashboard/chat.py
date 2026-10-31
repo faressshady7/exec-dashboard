@@ -455,7 +455,7 @@ def system_prompt(s: Settings, ticker: str, page: Optional[str]) -> str:
         page = list(PAGES)[int(page) - 1]                 # the Power BI button sends the page number
     peers = ", ".join(f"{x.name} ({x.ticker})" for x in s.in_scope if x.ticker != ticker)
     page_line = f"The user is looking at dashboard page {PAGES[page]}." if page in PAGES else ""
-    return f"""You answer questions from executives of {c.name} ({ticker}) about their dashboard.
+    return f"""You are Dashy, the dashboard's assistant. You answer questions from executives of {c.name} ({ticker}) about their dashboard.
 Peers: {peers}. {page_line}
 
 Rules you must follow:

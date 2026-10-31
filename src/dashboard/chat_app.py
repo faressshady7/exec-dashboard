@@ -47,7 +47,8 @@ STARTERS = {
 BADGE = {"answered": "✓ Numbers checked against your data", "general": "General knowledge — not from your data",
          "number_fallback": "Shown: the data itself (an AI answer could not be verified)"}
 
-st.set_page_config(page_title="Ask the dashboard", page_icon="💬", layout="centered")
+ICON = str(Path(__file__).with_name("dashy.png"))      # Dashy, the dashboard's AI assistant
+st.set_page_config(page_title="Ask Dashy", page_icon=ICON, layout="centered")
 s = load_settings()
 tickers = [c.ticker for c in s.in_scope]
 
@@ -103,7 +104,8 @@ ticker = c1.selectbox("Company", tickers, index=tickers.index(company0) if compa
 page = c2.selectbox("Dashboard page", [str(i) for i in range(1, 6)],
                     index=int(page0) - 1 if page0 in [str(i) for i in range(1, 6)] else 0,
                     format_func=lambda p: f"{p} {PAGE_NAMES[int(p) - 1]}")
-st.caption("Answers come from the dashboard's data, the latest 10-K/10-Q and filtered news. "
+st.markdown("### Ask Dashy")
+st.caption("Dashy answers from the dashboard's data, the latest 10-K/10-Q and filtered news. "
            "Every number is checked. General knowledge is labelled. Not investment advice.")
 
 
@@ -111,7 +113,7 @@ st.caption("Answers come from the dashboard's data, the latest 10-K/10-Q and fil
 def show(q, r) -> None:
     with st.chat_message("user"):
         st.write(q)
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar=ICON):
         st.markdown(r.answer.replace("$", "\\$"))     # '$' would start a maths formula in Markdown
         if r.outcome in BADGE:
             st.caption(BADGE[r.outcome])
@@ -148,7 +150,7 @@ if not ss.turns:
     for i, q in enumerate(STARTERS[page]):
         if cols[i].button(q, use_container_width=True):
             starter = q
-question = st.chat_input("Ask about this page…") or starter
+question = st.chat_input("Ask Dashy about this page…") or starter
 if question:
     if msg := limited():
         st.warning(msg)
