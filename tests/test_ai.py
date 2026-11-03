@@ -527,3 +527,14 @@ def test_news_context_is_checked_and_shown_after_the_headline():
     item = {"outlet": "CNBC", "date": "2026-10-21", "title": "CEO says fuel is a worry"}
     assert news_line(item, "context for the fuel cost rise.").endswith("— context for the fuel cost rise.")
     assert news_line(item) == "In the news: CNBC, 21 Oct: “CEO says fuel is a worry”"
+
+
+def test_brief_names_real_pages_and_does_not_repeat_itself():
+    from dashboard.ai import _page_ok, _repeats
+    assert not _page_ok("Consider reviewing the Fuel page where a 10% rise costs $328M.")[0]
+    assert not _page_ok("Consider the cash flow dashboard page.")[0]
+    assert _page_ok("Consider page 3 Risk Drivers, where a 10% rise costs $328M.")[0]
+    assert _page_ok("Consider the What-if page before deciding.")[0]
+    assert _repeats("Operating margin fell 2.9 pp as fuel costs rose.",
+                    "Operating margin fell 2.9 pp (Q3 2026 vs Q3 2025), mostly because fuel cost took 6.1 pp.")
+    assert not _repeats("Jet fuel is $4.44/gal, up 91.4% in a year.", "Margin fell 1.1 pp as fuel took 7.4 pp.")

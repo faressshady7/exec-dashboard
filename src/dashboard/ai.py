@@ -349,8 +349,11 @@ def round2_prompt(top: list[Insight], company: str, feedback: str = "", whys: li
             f"- complication (WHY): ONE sentence from a [CALCULATED WHY] insight. Say 'mostly because' only when its "
             f"summary says so, naming the same driver; if it says 'no single driver' or 'cancelled out', say that. "
             f"Never give any other cause.\n"
-            f"- resolution (WHAT TO DO): ONE sentence - what to look at or consider next, naming the dashboard page "
-            f"(never investment advice).\n"
+            f"- resolution (WHAT TO DO): ONE sentence - what to look at or consider next, naming the dashboard page by "
+            f"its number and exact name (page 1 Executive Briefing, page 2 Peer Benchmark, page 3 Risk Drivers, "
+            f"page 4 What-if, page 5 Company Detail), never investment advice.\n"
+            f"- situation and complication must not repeat each other: the situation is WHAT happened (one number), "
+            f"the complication is WHY (the calculated parts).\n"
             f"- fact_ids_used: ids of every fact whose number you cite.\n\n" + "\n".join(blocks) + fb)
 
 
@@ -563,8 +566,13 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
             if not w_ok:
                 chk = Check(False, chk.numbers_found, [f"why: {w_why}"])
         draft.headline = _sentence_case(draft.headline)
+        if chk.passed and draft.situation.strip() and _repeats(draft.situation, draft.complication):
+            chk = Check(False, chk.numbers_found, ["situation and why say the same thing: the situation states WHAT "
+                                                    "happened, the why line explains it with the calculated parts"])
         if chk.passed and draft.resolution.strip():          # no invented hedges / contracts in the resolution
             r_ok, r_why = _todo_ok(draft.resolution, facts)
+            if r_ok:
+                r_ok, r_why = _page_ok(draft.resolution)
             if r_ok and not re.search(r"\d", re.sub(r"\b[Pp]age\s+\d\b", "", draft.resolution)):
                 r_ok, r_why = False, "too vague: say what to consider and the number that makes it matter"
             if not r_ok:
@@ -877,6 +885,27 @@ def _chapter_ok(text_: str, page_facts: list[Fact], page: int) -> tuple[bool, st
 
 INVENTED = re.compile(r"\b(hedg\w*|contracts?|derivatives?|positions?)\b", re.IGNORECASE)
 SIGN_CLASH = re.compile(r"\b(fell|rose|dropped|declined|increased|decreased|grew|took|cuts?|reduces?|lowers?)\s+(?:by\s+)?[-\u2212+]\$?\d", re.IGNORECASE)
+
+
+DASH_PAGES = ("Executive Briefing", "Peer Benchmark", "Risk Drivers", "What-if", "Company Detail")
+PAGE_REF = re.compile(r"\b([A-Z][\w-]*(?:\s+[A-Z][\w-]*){0,2})\s+(?:dashboard\s+)?page\b(?!\s*\d)|\bthe\s+([\w -]{3,40}?)\s+(?:dashboard\s+)?page\b(?!\s*\d)")
+
+
+def _page_ok(text_: str) -> tuple[bool, str]:
+    """A page named in the text must be a real page ('the Fuel page' does not exist): page 3 or its name."""
+    for m in PAGE_REF.finditer(text_ or ""):
+        name = (m.group(1) or m.group(2) or "").strip()
+        if not name or name.lower() in ("this", "that", "next", "each", "every", "same"):
+            continue
+        if not any(p.lower() in name.lower() or name.lower() in p.lower() for p in DASH_PAGES):
+            return False, f"names a page that does not exist ('{name} page'): use page 1-5 or " + ", ".join(DASH_PAGES)
+    return True, ""
+
+
+def _repeats(a: str, b: str) -> bool:
+    """Two lines of the brief that say the same thing (same numbers in both)."""
+    na, nb = set(re.findall(r"\d[\d.,]*", a or "")), set(re.findall(r"\d[\d.,]*", b or ""))
+    return bool(na) and na <= nb or bool(nb) and nb <= na and len(nb) >= 2 and len(na) >= 2
 
 
 def _todo_ok(text_: str, facts: list[Fact]) -> tuple[bool, str]:
