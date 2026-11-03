@@ -401,7 +401,7 @@ def news_items(eng: Engine, focal: str, days: int = 30, limit: int = 8) -> list[
     """Headlines that PASSED the news test (silver), for this airline or the industry, newest first.
     The AI may only pick one by id; the dashboard line ('In the news: ...') is written by code."""
     q = text("""
-        SELECT n.title, n.domain, d.full_date, n.topic, n.url FROM gold.fact_news n
+        SELECT n.title, n.domain, d.full_date, n.topic, n.url, n.summary FROM gold.fact_news n
         LEFT JOIN gold.dim_company c USING (company_key) JOIN gold.dim_date d USING (date_key)
         WHERE n.usable AND (c.ticker = :t OR n.scope = 'industry')
           AND d.full_date >= (SELECT max(full_date) FROM gold.dim_date) - :days
@@ -418,7 +418,8 @@ def news_items(eng: Engine, focal: str, days: int = 30, limit: int = 8) -> list[
             continue
         seen.add(key)
         out.append({"id": f"n{len(out) + 1}", "title": r["title"], "outlet": outlet_name(r["domain"]),
-                    "date": r["full_date"], "topic": r["topic"], "url": r["url"]})
+                    "date": r["full_date"], "topic": r["topic"], "url": r["url"],
+                    "summary": (r.get("summary") or "")[:300]})
         if len(out) >= limit:
             break
     return out
@@ -437,9 +438,11 @@ def outlet_name(domain: str) -> str:
     return known.get(d, d.split(".")[0].replace("-", " ").title() if d else "News")
 
 
-def news_line(item: dict) -> str:
+def news_line(item: dict, context: str = "") -> str:
+    """'In the news: outlet, date: "headline"' (code), plus the AI's checked one-line context when there is one."""
     d = pd.Timestamp(item["date"])
-    return f"In the news: {item['outlet']}, {d.day} {d.strftime('%b')}: \u201c{item['title']}\u201d"
+    line = f"In the news: {item['outlet']}, {d.day} {d.strftime('%b')}: \u201c{item['title']}\u201d"
+    return f"{line} \u2014 {context.strip().rstrip('.')}." if context.strip() else line
 
 
 def narrative_facts(s: Settings, eng: Engine, cands: list[Insight]) -> list[Insight]:
