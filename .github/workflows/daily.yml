@@ -8,8 +8,10 @@ name: daily-pipeline
 
 on:
   schedule:
-    - cron: "17 3 * * *"        # 03:17 UTC = 06:17 Cairo (summer)
-    - cron: "47 5 * * *"        # backup: 05:47 UTC = 08:47 Cairo, skipped if today already succeeded
+    # after the Gemini free quota resets (midnight US Pacific = 08:00 UTC in winter, 07:00 UTC in summer),
+    # so the AI text is written by the main model, not the backup
+    - cron: "17 8 * * *"        # 08:17 UTC = 10:17 Cairo
+    - cron: "47 9 * * *"        # backup: 09:47 UTC = 11:47 Cairo, skipped if today already succeeded
   workflow_dispatch: {}
 
 concurrency:
