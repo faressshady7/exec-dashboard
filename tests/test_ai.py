@@ -169,7 +169,7 @@ def test_certainty_wording_is_flagged_and_prompt_has_rule_6():
     terms = load_settings().ai.flag_terms
     assert check_wording("Higher fuel will cost United $379M.", terms) == ["certainty: will cost"]
     assert check_wording("Fuel is estimated to cost $379M based on past quarters.", terms) == []
-    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v8"
+    assert "never say that something WILL happen" in SYSTEM and PROMPT_VERSION == "v9"
 
 
 
@@ -516,3 +516,14 @@ def test_rank_n_of_m_says_what_the_rank_means():
     assert f("Free Cash Flow Ranks 3 of 3 with -$351M") == "Free Cash Flow Ranks worst of 3 with -$351M"
     assert f("ranking 1 out of 3") == "ranking best of 3"
     assert f("rank 2/3") == "rank 2 of 3 (1 = best)"
+
+
+def test_news_context_is_checked_and_shown_after_the_headline():
+    from dashboard.ai import _context_ok
+    from dashboard.insights import news_line
+    assert _context_ok("context for the fuel cost rise: carriers report higher fuel bills", {})[0]
+    assert not _context_ok("fuel rose 20% this month", {})[0]                    # numbers from news never pass
+    assert not _context_ok("margin fell because of fuel", {})[0]                 # no causes from news
+    item = {"outlet": "CNBC", "date": "2026-10-21", "title": "CEO says fuel is a worry"}
+    assert news_line(item, "context for the fuel cost rise.").endswith("— context for the fuel cost rise.")
+    assert news_line(item) == "In the news: CNBC, 21 Oct: “CEO says fuel is a worry”"
