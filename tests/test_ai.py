@@ -538,3 +538,12 @@ def test_brief_names_real_pages_and_does_not_repeat_itself():
     assert _repeats("Operating margin fell 2.9 pp as fuel costs rose.",
                     "Operating margin fell 2.9 pp (Q3 2026 vs Q3 2025), mostly because fuel cost took 6.1 pp.")
     assert not _repeats("Jet fuel is $4.44/gal, up 91.4% in a year.", "Margin fell 1.1 pp as fuel took 7.4 pp.")
+
+
+def test_unit_clash_and_decrease_of_minus_are_rejected():
+    from dashboard.ai import _item_ok
+    from dashboard.insights import Fact
+    f = [Fact("a", "fuel part", -6.1, "pp"), Fact("b", "margin change", -2.9, "pp")]
+    assert not _item_ok("Operating margin fell as fuel costs rose to $-6.1 pp.", f)[0]
+    assert not _item_ok("Margin dropped, a decrease of -2.9 pp.", f)[0]
+    assert _item_ok("Margin fell 2.9 pp; fuel took 6.1 pp.", f)[0]

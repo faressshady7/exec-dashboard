@@ -140,7 +140,7 @@ CHART_ONLY = {"peer_bars": ("peer:operating_margin_pct",),
 PAGE_EVIDENCE = {"page_briefing": ("market_position", "exposure", "peer_gap", "trend", "change_point", "news_event"),
                  "page_peers": ("peer_gap", "valuation"), "page_risks": ("exposure", "market_position"),
                  "page_whatif": ("scenario", "scenario_latest", "exposure"), "page_detail": ("trend", "change_point")}
-DOUBLE_NEG = re.compile(r"\b(reduc|cut|lower|decreas|fall|drop|declin|los)\w*\b[^.]{0,40}?\bby\s+(?:about\s+)?[-\u2212]\$?\d",
+DOUBLE_NEG = re.compile(r"\b(reduc|cut|lower|decreas|fall|drop|declin|los)\w*\b[^.]{0,40}?\b(?:by|of)\s+(?:about\s+)?[-\u2212]\$?\d",
                         re.IGNORECASE)
 CHART_ROOM = {"jet_fuel": (34, 70), "share_price": (70, 150), "valuation": (70, 150), "peer_bars": (45, 80),
               "sensitivity": (90, 190), "fuel_exposure": (55, 110), "episodes": (70, 150), "kpi_matrix": (110, 280)}
@@ -561,6 +561,12 @@ def generate(s: Settings, cands: list[Insight], llm: LLM, whys: list[Insight] | 
             feedback = "your previous answer was not valid JSON. Reply with the JSON object only."
             continue
         chk = check_numbers(f"{draft.headline} {draft.brief}", facts)
+        if chk.passed:                                      # the same wording guards as every other AI item
+            for part in (draft.headline, draft.situation, draft.complication, draft.resolution):
+                g_ok, g_why = _item_ok(part, facts) if part.strip() else (True, "")
+                if not g_ok:
+                    chk = Check(False, chk.numbers_found, [g_why])
+                    break
         if chk.passed and draft.complication.strip():          # the 'why' line: cause only where arithmetic backs it
             w_ok, w_why = _why_ok(draft.complication, whys, facts)
             if not w_ok:
@@ -773,8 +779,13 @@ def _item_ok(text_: str, facts: list[Fact], limit: int = 0) -> tuple[bool, str]:
         return False, "double negative (write 'cuts it by $X', not 'reduces it by -$X')"
     if SIGN_CLASH.search(text_):
         return False, "sign clash (write 'fell $354M', not 'fell -$354M')"
+    if UNIT_CLASH.search(text_):
+        return False, "unit clash ('$-6.1 pp'): a dollar sign never goes with pp or %"
     chk = check_numbers(text_, facts)
     return chk.passed, ("" if chk.passed else "numbers not in this chart's or page's facts: " + ", ".join(chk.unmatched))
+
+
+UNIT_CLASH = re.compile(r"\$\s?-?\d[\d.,]*\s*(?:pp|%|percentage)")
 
 
 CONNECTOR = re.compile(r"^(that is( mostly)?( because)?|so|which|and|but|against peers|as a result)[,:]?\s+", re.IGNORECASE)
