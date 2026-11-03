@@ -529,7 +529,10 @@ def historical_moves(mkt: pd.DataFrame, s: Settings) -> list[dict]:
     """Measure each configured episode from the data: % change in jet fuel and bp change in
     fed funds between the average of the start month and the average of the end month."""
     out = []
-    last = mkt["obs_date"].max() if len(mkt) else None
+    # the rolling episode ends on the last JET FUEL price: another series (e.g. a daily index) can be a few
+    # days newer, and a month with no fuel price would silently drop the episode
+    fuel = mkt[mkt["code"] == "jet_fuel"] if len(mkt) else mkt
+    last = fuel["obs_date"].max() if len(fuel) else None
     for sc in s.scenarios:
         end = pd.Timestamp(sc.end) if sc.end else last
         start = pd.Timestamp(sc.start) if sc.start else (end - pd.DateOffset(years=1) if end is not None else None)

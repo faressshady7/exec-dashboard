@@ -192,7 +192,7 @@ def test_brief_can_be_about_any_company():
 
 def _narrative_items():
     from dashboard.insights import Fact, Insight
-    return [Insight(id="exp", type="exposure", title="Exposure to jet fuel", summary="A 10% rise in jet fuel is estimated to cost $379M a quarter.",
+    return [Insight(id="exposure:jet_fuel", type="exposure", title="Exposure to jet fuel", summary="A 10% rise in jet fuel is estimated to cost $379M a quarter.",
                     facts=[Fact("exposure.fuel.impact_10pct", "fuel", -379e6, "USD")], significance=0.8, impact=1.0),
             Insight(id="mkt", type="market_position", title="Jet fuel high", summary="Jet fuel is $4.56/gal.",
                     facts=[Fact("jet_fuel.latest", "jet fuel", 4.56, "USD/gal")], significance=0.9, impact=1.0)]
