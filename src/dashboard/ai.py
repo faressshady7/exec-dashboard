@@ -131,7 +131,10 @@ CHART_EVIDENCE = {"jet_fuel": ("market_position", "exposure"), "share_price": ("
                   "sensitivity": ("exposure",), "fuel_exposure": ("exposure", "peer_gap"),
                   "episodes": ("scenario_latest",), "kpi_matrix": ("trend", "change_point")}
 # charts that show ONE KPI only: their evidence is that KPI's insight, not every peer comparison
-CHART_ONLY = {"peer_bars": ("peer:operating_margin_pct",)}
+CHART_ONLY = {"peer_bars": ("peer:operating_margin_pct",),
+              # page 3 bars = $ lost per airline for +10% fuel: the fuel exposure and the fuel-share comparison only
+              "fuel_exposure": ("exposure:jet_fuel", "peer:fuel_share_opex_pct"),
+              "valuation": ("valuation",)}
 # room on the dashboard: (title, caption) in characters, from each chart panel's width
 # which computed insights each page note may draw on (so a page talks about what is on that page)
 PAGE_EVIDENCE = {"page_briefing": ("market_position", "exposure", "peer_gap", "trend", "change_point", "news_event"),

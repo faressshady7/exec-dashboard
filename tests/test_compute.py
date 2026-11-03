@@ -269,3 +269,15 @@ def test_whatif_leads_with_the_most_recent_episode():
     ins = {i.id: i for i in scenario_insights(sc, "AAL")}
     assert "Last 12 months (Oct 2025-Oct 2026)" in ins["scenario:latest"].summary and ins["scenario:latest"].type == "scenario_latest"
     assert ins["scenario:latest"].facts[0].value == -4.47e9
+
+
+def test_rolling_episode_ends_on_the_last_fuel_price_not_a_newer_series():
+    from dashboard.compute import historical_moves
+    from dashboard.config import HistoricalScenario
+    d = pd.date_range("2025-01-01", "2026-10-27", freq="D")
+    mkt = pd.concat([pd.DataFrame({"code": "jet_fuel", "obs_date": d, "value": 2.0 + (d - d[0]).days / 300}),
+                     pd.DataFrame({"code": "vix", "obs_date": pd.date_range("2026-11-01", "2026-11-02"), "value": 20.0})])
+    s = load_settings()
+    s2 = s.model_copy(update={"scenarios": [HistoricalScenario(name="Last 12 months, again")]})
+    h = historical_moves(mkt, s2)
+    assert len(h) == 1 and h[0]["end"] == date(2026, 10, 27) and h[0]["fuel_pct"] > 0
