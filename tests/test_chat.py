@@ -503,3 +503,10 @@ def test_today_context_is_preloaded_and_its_sources_listed_only_when_used():
     assert s.facts and not s.sources and not s.used               # facts count for the check; nothing listed yet
     s.used_preloaded("Jet fuel is $4.44/gal; CNBC reported carriers' fuel bills are rising.")
     assert {x["type"] for x in s.sources} == {"Dashboard", "News"}
+
+
+def test_today_news_context_uses_only_outlets_the_ai_may_use(s):
+    t = FakeTools(s)
+    t.call("search_news", {"company": "UAL", "max_tier": 2})
+    sql, params = t.sql[0]
+    assert "tier <= :mt" in sql and params["mt"] == 2
