@@ -380,7 +380,7 @@ class GeminiChat(ChatModel):
             raise SystemExit("No GEMINI_API_KEY in .env - run scripts\\set_gemini_key.bat")
         self.types = types
         self.client = genai.Client(api_key=key, http_options=types.HttpOptions(timeout=s.chat.request_timeout_s * 1000))
-        self.cfg, self.models = s.ai, [m for m in (s.chat.model or s.ai.model, s.ai.fallback_model) if m]
+        self.cfg, self.models = s.ai, list(dict.fromkeys(m for m in (s.chat.model or s.ai.model, s.ai.middle_model, s.ai.fallback_model) if m))
         self.timings, self.thinking = [], s.chat.thinking_level
         self.cooldown, self.skip_until = s.chat.busy_cooldown_s, {}   # model -> time it may be tried again
         self.name = self.models[0]

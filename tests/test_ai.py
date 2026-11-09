@@ -547,3 +547,31 @@ def test_unit_clash_and_decrease_of_minus_are_rejected():
     assert not _item_ok("Operating margin fell as fuel costs rose to $-6.1 pp.", f)[0]
     assert not _item_ok("Margin dropped, a decrease of -2.9 pp.", f)[0]
     assert _item_ok("Margin fell 2.9 pp; fuel took 6.1 pp.", f)[0]
+
+
+def test_model_chain_skips_a_down_model_for_the_rest_of_the_run():
+    from dashboard.ai import GeminiLLM
+    from dashboard.config import AISettings
+    llm = GeminiLLM.__new__(GeminiLLM)
+    llm.cfg = AISettings(model="main", middle_model="middle", fallback_model="lite")
+    llm.check_time = lambda: None
+    calls = []
+
+    def fake_call(model, prompt, schema):
+        calls.append(model)
+        if model == "main":
+            raise RuntimeError("503 UNAVAILABLE")
+        if model == "middle":
+            raise RuntimeError("404 NOT_FOUND model")
+        return "ok"
+    llm._call = fake_call
+    assert llm.json("p", object) == "ok" and llm.json("p", object) == "ok"
+    assert calls == ["main", "middle", "lite", "lite"]          # down models are not retried in the same run
+
+
+def test_meta_talk_is_rejected():
+    from dashboard.ai import _item_ok
+    from dashboard.insights import Fact
+    f = [Fact("a", "operating income change", -230e6, "USD")]
+    assert not _item_ok("DAL operating margin is not listed with that exact number here, but operating income fell $230M.", f)[0]
+    assert _item_ok("DAL operating income fell $230M in Q3 2026.", f)[0]
