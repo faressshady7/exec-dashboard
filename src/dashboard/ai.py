@@ -270,34 +270,40 @@ class GeminiLLM(LLM):
         raise ValueError(f"model returned invalid JSON twice: {str(last_err)[:120]}")
 
     def json(self, prompt, schema):
-        """Main model first. Round 1 (relevance scores) goes straight to the backup model to save the main
-        model's free daily quota for the writing rounds. A per-minute 429 that asks to retry within 60 s
-        is waited out once; otherwise rate limit / overload / timeout -> backup model."""
+        """Models in order: main, middle (if set), backup. Round 1 (relevance scores) goes straight to the
+        backup to save the main model's free quota. A per-minute 429 that asks to retry within 60 s is waited
+        out once. A model that is overloaded, out of quota, timed out or not found is skipped for the REST OF
+        THE RUN (no repeated 20 s waits on a model that is down all day) and the next one is tried."""
         self.check_time()
-        model = self.cfg.fallback_model if (schema is Round1 and self.cfg.fallback_model) else self.cfg.model
-        busy = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out", "Timeout")
-        for attempt in range(2):
-            try:
-                self.name = model
-                return self._call(model, prompt, schema)
-            except Exception as e:
-                msg = f"{type(e).__name__} {e}"
-                wait = re.search(r"retry(?:Delay)?['\"]?:?\s*['\"]?(\d+(?:\.\d+)?)s", msg, re.IGNORECASE)
-                if attempt == 0 and "429" in msg and wait and float(wait.group(1)) <= 60 and "PerDay" not in msg:
-                    self.check_time()
-                    time.sleep(float(wait.group(1)) + 1)      # per-minute limit: wait once, then retry
-                    continue
-                if attempt == 0 and ("503" in msg or "UNAVAILABLE" in msg) and model != self.cfg.fallback_model:
-                    self.check_time()
-                    time.sleep(20)                            # main model briefly overloaded: one retry before the backup
-                    continue
-                if model != self.cfg.fallback_model and self.cfg.fallback_model and any(k.lower() in msg.lower() for k in busy):
-                    self.fallback_reason = f"{type(e).__name__}: {str(e)[:90]}"
-                    self.check_time()
-                    self.name = self.cfg.fallback_model
-                    return self._call(self.cfg.fallback_model, prompt, schema)
-                raise
-        raise RuntimeError("unreachable")
+        chain = [m for m in (self.cfg.model, self.cfg.middle_model, self.cfg.fallback_model) if m]
+        chain = list(dict.fromkeys(chain))                                    # no duplicates
+        if schema is Round1 and self.cfg.fallback_model:
+            chain = [self.cfg.fallback_model]
+        skip = getattr(self, "skipped", set())
+        self.skipped = skip
+        todo = [m for m in chain if m not in skip] or chain[-1:]
+        busy = ("429", "RESOURCE_EXHAUSTED", "503", "504", "UNAVAILABLE", "DEADLINE_EXCEEDED", "timed out",
+                "Timeout", "404", "NOT_FOUND")
+        for i, model in enumerate(todo):
+            for attempt in range(2):
+                try:
+                    self.name = model
+                    return self._call(model, prompt, schema)
+                except Exception as e:
+                    msg = f"{type(e).__name__} {e}"
+                    wait = re.search(r"retry(?:Delay)?['\"]?:?\s*['\"]?(\d+(?:\.\d+)?)s", msg, re.IGNORECASE)
+                    if attempt == 0 and "429" in msg and wait and float(wait.group(1)) <= 60 and "PerDay" not in msg:
+                        self.check_time()
+                        time.sleep(float(wait.group(1)) + 1)      # per-minute limit: wait once, then retry
+                        continue
+                    if i + 1 < len(todo) and any(k.lower() in msg.lower() for k in busy):
+                        if model != chain[-1]:
+                            skip.add(model)                     # down or out of quota: not tried again this run
+                        self.fallback_reason = f"{model}: {type(e).__name__}: {str(e)[:80]}"
+                        self.check_time()
+                        break                                   # next model in the chain
+                    raise
+        raise RuntimeError("no model in the chain answered")
 
 
 class OllamaLLM(LLM):
@@ -781,10 +787,16 @@ def _item_ok(text_: str, facts: list[Fact], limit: int = 0) -> tuple[bool, str]:
         return False, "sign clash (write 'fell $354M', not 'fell -$354M')"
     if UNIT_CLASH.search(text_):
         return False, "unit clash ('$-6.1 pp'): a dollar sign never goes with pp or %"
+    if META_TALK.search(text_):
+        return False, "talks about its inputs ('not listed here'): write about the company, using only the facts"
     chk = check_numbers(text_, facts)
     return chk.passed, ("" if chk.passed else "numbers not in this chart's or page's facts: " + ", ".join(chk.unmatched))
 
 
+# the model talking about its own inputs instead of the business ("not listed with that exact number here")
+META_TALK = re.compile(r"\b(not (listed|provided|available|given|shown|included)|exact (number|figure)|the (facts|data|figures) "
+                       r"(provided|given|listed)|as an ai|i (cannot|can't|don't|do not)|no (data|figure|number)s? "
+                       r"(is |are )?(available|provided|given))\b", re.IGNORECASE)
 UNIT_CLASH = re.compile(r"\$\s?-?\d[\d.,]*\s*(?:pp|%|percentage)")
 
 

@@ -120,6 +120,7 @@ class NewsSettings(BaseModel):
 class AISettings(BaseModel):
     provider: Literal["gemini", "ollama", "mock"] = "gemini"
     model: str = "gemini-3.8-flash"
+    middle_model: Optional[str] = None                     # tried after the main model, before the backup
     fallback_model: Optional[str] = "gemini-3.5-flash-lite"
     ollama_model: str = "llama3.1:8b"
     temperature: float = Field(default=0.2, ge=0, le=2)

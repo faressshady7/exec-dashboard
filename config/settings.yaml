@@ -316,6 +316,7 @@ scenarios:
 ai:
   provider: gemini                 # gemini | ollama
   model: gemini-3.8-flash          # free tier
+  middle_model: gemini-3.5-flash   # tried when the main model is overloaded or out of quota (skipped if not found)
   fallback_model: gemini-3.5-flash-lite   # used if the main model is rate-limited
   ollama_model: llama3.1:8b        # only if provider: ollama (local, offline)
   temperature: 0.2                 # low = consistent wording between runs
