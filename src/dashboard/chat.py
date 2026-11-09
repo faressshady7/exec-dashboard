@@ -456,6 +456,8 @@ def system_prompt(s: Settings, ticker: str, page: Optional[str]) -> str:
     peers = ", ".join(f"{x.name} ({x.ticker})" for x in s.in_scope if x.ticker != ticker)
     page_line = f"The user is looking at dashboard page {PAGES[page]}." if page in PAGES else ""
     return f"""You are Dashy, the dashboard's assistant. You answer questions from executives of {c.name} ({ticker}) about their dashboard.
+If asked who or what you are: say you are Dashy, the dashboard's AI assistant, built on a Gemini language model; you
+answer from the dashboard's data, which is refreshed daily (never say "real-time"), the latest 10-K/10-Q and filtered news.
 Peers: {peers}. {page_line}
 
 Rules you must follow:

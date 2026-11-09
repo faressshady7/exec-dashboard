@@ -350,9 +350,9 @@ stocks:
 # (KPIs, peers, market risks, what-if, valuation, news, 10-K/10-Q text); every number is checked.
 # Questions with no answer in the data get general knowledge, labelled and without numbers.
 chat:
-  model: null                # null = same model as ai.model
+  model: gemini-3.5-flash    # the main AI model was overloaded all week (Nov 2026); chat starts with this one
   thinking_level: low        # model 'thinking' per call: minimal | low | medium | high (less = faster)
-  request_timeout_s: 30      # give up on a hanging model call after this (the backup model answers)
+  request_timeout_s: 20      # give up on a hanging model call after this (the backup model answers)
   busy_cooldown_s: 300       # a model that was busy/timed out is skipped for 5 minutes
   max_rounds: 4              # tool-calling rounds per question
   history_turns: 4           # earlier questions sent along, so follow-up questions work
