@@ -477,3 +477,9 @@ def test_db_password_swap_keeps_server_and_encodes():
     from dashboard.setdbpw import with_password
     u = with_password("postgresql://postgres.ref:OLD@aws-0-eu-west-1.pooler.supabase.com:5432/postgres", "n@w:p/w%")
     assert u == "postgresql://postgres.ref:n%40w%3Ap%2Fw%25@aws-0-eu-west-1.pooler.supabase.com:5432/postgres"
+
+
+def test_dashy_knows_who_it_is_and_never_claims_real_time():
+    from dashboard.chat import system_prompt
+    p = system_prompt(load_settings(), "UAL", page="1")
+    assert "You are Dashy" in p and "refreshed daily" in p
