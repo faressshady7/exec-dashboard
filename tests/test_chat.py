@@ -212,11 +212,12 @@ def test_model_error_gives_a_polite_message(s):
 def test_bad_tool_arguments_return_an_error_not_data(s, name, args):
     out = {}
     def script(q, ex):
+        out["n"] = len(t.sql)                         # today's context was already looked up
         out["r"] = ex(name, args)
         return "ok"
     t = FakeTools(s)
     answer("q?", "UAL", s, t, model(script))
-    assert "error" in out["r"] and t.sql == []                                   # no query ran
+    assert "error" in out["r"] and len(t.sql) == out["n"]                        # the bad call ran no query
 
 
 def test_search_words_are_bound_parameters_not_pasted_sql(s):
@@ -483,3 +484,22 @@ def test_dashy_knows_who_it_is_and_never_claims_real_time():
     from dashboard.chat import system_prompt
     p = system_prompt(load_settings(), "UAL", page="1")
     assert "You are Dashy" in p and "refreshed daily" in p
+
+
+def test_today_context_is_preloaded_and_its_sources_listed_only_when_used():
+    from dashboard.chat import _Session, ToolResult
+    from dashboard.insights import Fact
+
+    class T:
+        def call(self, name, args):
+            if name == "get_market_risks":
+                return ToolResult([{"driver": "Jet fuel"}], [Fact("mkt:jet", "jet fuel", 4.44, "USD/gal")],
+                                  sources=[{"type": "Dashboard", "title": "Market drivers today (FRED)"}])
+            return ToolResult([{"headline": "Fuel bills surge"}], sources=[
+                {"type": "News", "title": "Fuel bills surge", "outlet": "cnbc.com", "date": "2026-11-08", "url": "u"}],
+                untrusted=True)
+    s = _Session(T())
+    assert s.preload("get_market_risks", {}) and s.preload("search_news", {"company": "UAL"})
+    assert s.facts and not s.sources and not s.used               # facts count for the check; nothing listed yet
+    s.used_preloaded("Jet fuel is $4.44/gal; CNBC reported carriers' fuel bills are rising.")
+    assert {x["type"] for x in s.sources} == {"Dashboard", "News"}
